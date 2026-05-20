@@ -1,0 +1,20 @@
+# Local notes and generated backups
+.Commands/
+Command *.txt
+local-notes/
+*.bak
+*.bak-*
+
+# Windows metadata
+Thumbs.db
+Desktop.ini
+
+# Editor folders
+.vscode/
+.idea/
+
+# Logs and scratch output
+logs/
+*.log
+tmp/
+temp/
