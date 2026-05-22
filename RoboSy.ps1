@@ -7,7 +7,7 @@
 #   1. Move  - Default option. Press Enter on the main menu to choose it.
 #   2. Copy  - Copy a file or folder with robocopy.
 #   3. Fast Delete - Permanently delete a file or folder with robocopy purge.
-#   4. Link  - Create a symbolic link at the original path.
+#   4. Move + Symlink - Create a symbolic link at the original path.
 #              If the original path already contains a real file/folder and
 #              the target path does not exist, the item is moved to the target
 #              path with robocopy first, then a symbolic link is created at the
@@ -218,7 +218,7 @@ function Initialize-LogPath {
     foreach ($logDir in $candidateDirs) {
         try {
             if (-not (Test-Path -LiteralPath $logDir)) {
-                New-Item -ItemType Directory -Path $logDir -Force -ErrorAction Stop | Out-Null
+                New-RoboSyDirectory -Path $logDir -Force | Out-Null
             }
 
             $probe = Join-Path -Path $logDir -ChildPath (".robosy-write-test-{0}.tmp" -f $PID)
@@ -705,6 +705,35 @@ function Remove-ExistingLinkOnly {
 
     Write-Log "INFO" ("Existing link removed safely without following the link target: {0}" -f $Path)
     return $true
+}
+
+function Remove-EmptySourceDirectoryAfterMove {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
+        return $true
+    }
+
+    $remaining = @(Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue)
+    if ($remaining.Count -gt 0) {
+        Write-Log "WARN" ("Source folder still has remaining items after move: {0}" -f $Path)
+        return $false
+    }
+
+    try {
+        Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
+        Write-Log "INFO" ("Removed empty source folder after move: {0}" -f $Path)
+        return $true
+    }
+    catch {
+        Write-Log "WARN" ("Could not remove empty source folder {0}: {1}" -f $Path, $_.Exception.Message)
+        Write-Line ("Empty source folder could not be removed: {0}" -f $Path) $script:UiColor.Warning
+        Write-Line $_.Exception.Message $script:UiColor.Muted
+        if (-not (Test-RunningAsAdministrator)) {
+            Write-Line "This may be a permission issue." $script:UiColor.Warning
+        }
+        return $false
+    }
 }
 
 function Write-MoveLinkMissingPaths {
@@ -1264,7 +1293,7 @@ function Read-SourcePath {
         Write-Blank
 
         $prompt = if ($Mode -eq "DELETE") { "Delete path" } else { "Source" }
-        $inputPath = Read-ConsoleText $prompt
+        $inputPath = Read-ConsoleText $prompt -AutoAcceptExistingPath
         if (Test-ExitInput $inputPath) { return @{ Action = "EXIT" } }
         if (Test-BackInput $inputPath) { return @{ Action = "BACK" } }
 
@@ -1289,6 +1318,19 @@ function Read-SourcePath {
                 Write-Line "Source path does not exist." $script:UiColor.Error
             }
             Start-Sleep -Seconds 1
+            continue
+        }
+
+        if (($Mode -eq "MOVE" -or $Mode -eq "COPY") -and $sourceInfo.IsReparsePoint) {
+            Write-Blank
+            Write-Line "Move/Copy source cannot be a symbolic link, junction, or other reparse point." $script:UiColor.Error
+            Write-Line "Robocopy can follow a source link and move/copy the real target's contents instead." $script:UiColor.Warning
+            if (-not [string]::IsNullOrWhiteSpace($sourceInfo.LinkTarget)) {
+                Write-Line ("Detected link target: {0}" -f $sourceInfo.LinkTarget) $script:UiColor.Muted
+            }
+            Write-Line "Choose the real target path directly, or use Move + Symlink when you want to manage a link." $script:UiColor.Muted
+            Write-Log "ERROR" ("Move/Copy source rejected because it is a reparse point: {0}" -f (Format-PathStatusForLog $sourceInfo))
+            Start-Sleep -Seconds 3
             continue
         }
 
@@ -1329,7 +1371,7 @@ function Read-DestinationPath {
         }
 
         Write-Blank
-        $inputPath = Read-ConsoleText "Destination/target"
+        $inputPath = Read-ConsoleText "Destination/target" -AutoAcceptExistingPath
         if (Test-ExitInput $inputPath) { return @{ Action = "EXIT" } }
         if (Test-BackInput $inputPath) { return @{ Action = "BACK" } }
 
@@ -1364,7 +1406,7 @@ function Read-DestinationPath {
                 continue
             }
 
-            if ($SourceInfo.Type -eq "File" -and -not $destInfo.Exists) {
+            if (-not $destInfo.Exists) {
                 $leaf = [System.IO.Path]::GetFileName($destInfo.Path.TrimEnd([char[]]@('\', '/')))
                 $extension = [System.IO.Path]::GetExtension($leaf)
 
@@ -1372,7 +1414,7 @@ function Read-DestinationPath {
                     Write-Blank
                     Write-Line "This destination looks like a file name:" $script:UiColor.Warning
                     Write-Line ("  {0}" -f $destInfo.Path) $script:UiColor.Path
-                    Write-Line "Robocopy will treat it as a folder and keep the source file name." $script:UiColor.Muted
+                    Write-Line "Robocopy will treat it as a destination folder path, not as an output file or archive." $script:UiColor.Muted
                     $useAnyway = Read-YesNo "Use this as a destination folder anyway" $true
 
                     if ($useAnyway -is [string] -and $useAnyway -eq "EXIT") { return @{ Action = "EXIT" } }
@@ -1451,12 +1493,21 @@ function Invoke-RobocopyJob {
 
     Write-Blank
     $code = Invoke-RobocopyCommand -Arguments $robocopyArgs
+    $sourceCleanupOk = $true
+
+    if ($code -le 7 -and $Mode -eq "MOVE" -and $SourceInfo.Type -eq "Directory") {
+        $sourceCleanupOk = Remove-EmptySourceDirectoryAfterMove -Path $SourceInfo.Path
+    }
 
     Write-Blank
     Write-Rule $script:UiColor.Border
-    if ($code -le 7) {
+    if ($code -le 7 -and $sourceCleanupOk) {
         Write-Line "Job completed." $script:UiColor.Success
         Write-Log "INFO" ("Job completed: mode={0}, exitCode={1}" -f $Mode, $code)
+    }
+    elseif ($code -le 7) {
+        Write-Line "Job completed, but the empty source folder could not be removed." $script:UiColor.Warning
+        Write-Log "WARN" ("Job completed with source cleanup warning: mode={0}, exitCode={1}, source={2}" -f $Mode, $code, $SourceInfo.Path)
     }
     else {
         Write-Line "Job completed with errors." $script:UiColor.Error
@@ -1487,6 +1538,59 @@ function Format-CmdPathArgument {
     return ('"{0}"' -f ($Path -replace '"', '""'))
 }
 
+function ConvertTo-NewItemParentPath {
+    param([string]$Path)
+
+    return [System.Management.Automation.WildcardPattern]::Escape($Path)
+}
+
+function New-RoboSyDirectory {
+    param(
+        [string]$Path,
+        [switch]$Force
+    )
+
+    if ($Force) {
+        return [System.IO.Directory]::CreateDirectory($Path)
+    }
+
+    if (Test-Path -LiteralPath $Path) {
+        throw "An item already exists at the requested directory path: $Path"
+    }
+
+    return [System.IO.Directory]::CreateDirectory($Path)
+}
+
+function New-RoboSySymbolicLink {
+    param(
+        [string]$Path,
+        [string]$Target
+    )
+
+    $parent = Split-Path -Parent $Path
+    $name = Split-Path -Leaf $Path
+    if ([string]::IsNullOrWhiteSpace($parent)) {
+        $parent = "."
+    }
+
+    return (New-Item -ItemType SymbolicLink -Path (ConvertTo-NewItemParentPath $parent) -Name $name -Target $Target -ErrorAction Stop)
+}
+
+function New-RoboSyJunction {
+    param(
+        [string]$Path,
+        [string]$Target
+    )
+
+    $parent = Split-Path -Parent $Path
+    $name = Split-Path -Leaf $Path
+    if ([string]::IsNullOrWhiteSpace($parent)) {
+        $parent = "."
+    }
+
+    return (New-Item -ItemType Junction -Path (ConvertTo-NewItemParentPath $parent) -Name $name -Target $Target -ErrorAction Stop)
+}
+
 function New-RobocopyEmptySourceDirectory {
     param([string]$TargetPath)
 
@@ -1510,7 +1614,7 @@ function New-RobocopyEmptySourceDirectory {
             }
 
             if (-not (Test-Path -LiteralPath $rootPath)) {
-                New-Item -ItemType Directory -Path $rootPath -Force -ErrorAction Stop | Out-Null
+                New-RoboSyDirectory -Path $rootPath -Force | Out-Null
             }
 
             $emptySource = Join-Path -Path $rootPath -ChildPath (".robosy-empty-delete-{0}" -f ([Guid]::NewGuid().ToString("N")))
@@ -1523,7 +1627,7 @@ function New-RobocopyEmptySourceDirectory {
                 continue
             }
 
-            New-Item -ItemType Directory -Path $emptySourceFullPath -Force -ErrorAction Stop | Out-Null
+            New-RoboSyDirectory -Path $emptySourceFullPath -Force | Out-Null
             return $emptySourceFullPath
         }
         catch {
@@ -1809,7 +1913,7 @@ function Invoke-RobocopyMoveToExactPath {
         $targetParent = Split-Path -Parent $TargetPath
         if (-not [string]::IsNullOrWhiteSpace($targetParent) -and -not (Test-Path -LiteralPath $targetParent)) {
             try {
-                New-Item -ItemType Directory -Path $targetParent -Force -ErrorAction Stop | Out-Null
+                New-RoboSyDirectory -Path $targetParent -Force | Out-Null
             }
             catch {
                 Write-Log "WARN" ("Could not pre-create target parent {0}: {1}" -f $targetParent, $_.Exception.Message)
@@ -1820,20 +1924,11 @@ function Invoke-RobocopyMoveToExactPath {
         $robocopyArgs = @($SourceInfo.Path, $TargetPath, "/E") + $commonArgs + @("/MOVE")
         $code = Invoke-RobocopyCommand -Arguments $robocopyArgs
 
-        if ($code -le 7 -and (Test-Path -LiteralPath $SourceInfo.Path)) {
-            $remaining = @(Get-ChildItem -LiteralPath $SourceInfo.Path -Force -ErrorAction SilentlyContinue)
-            if ($remaining.Count -eq 0) {
-                try {
-                    Remove-Item -LiteralPath $SourceInfo.Path -Force -ErrorAction Stop
-                }
-                catch {
-                    Write-Log "WARN" ("Could not remove empty source folder {0}: {1}" -f $SourceInfo.Path, $_.Exception.Message)
-                    if (-not (Test-RunningAsAdministrator)) {
-                        Write-Line "Empty source folder could not be removed - probably a permission issue." $script:UiColor.Warning
-                        $null = Invoke-AdminSwitch "Relaunching RoboSy as Administrator..."
-                    }
-                }
+        if ($code -le 7 -and -not (Remove-EmptySourceDirectoryAfterMove -Path $SourceInfo.Path)) {
+            if (-not (Test-RunningAsAdministrator)) {
+                $null = Invoke-AdminSwitch "Relaunching RoboSy as Administrator..."
             }
+            return 16
         }
 
         return $code
@@ -1847,9 +1942,16 @@ function Invoke-RobocopyMoveToExactPath {
         return 16
     }
 
+    if (Test-Path -LiteralPath $TargetPath) {
+        Write-Line "Target file path already exists; move + link will not overwrite it:" $script:UiColor.Error
+        Write-Line ("  {0}" -f $TargetPath) $script:UiColor.Path
+        Write-Log "ERROR" ("Exact target file path already exists before move: {0}" -f $TargetPath)
+        return 16
+    }
+
     if (-not (Test-Path -LiteralPath $targetParent)) {
         try {
-            New-Item -ItemType Directory -Path $targetParent -Force -ErrorAction Stop | Out-Null
+            New-RoboSyDirectory -Path $targetParent -Force | Out-Null
         }
         catch {
             Write-Log "WARN" ("Could not pre-create target parent {0}: {1}" -f $targetParent, $_.Exception.Message)
@@ -1861,6 +1963,13 @@ function Invoke-RobocopyMoveToExactPath {
 
     if ($code -le 7 -and $targetName -ne $SourceInfo.Name) {
         $movedPath = Join-Path -Path $targetParent -ChildPath $SourceInfo.Name
+        if (Test-Path -LiteralPath $TargetPath) {
+            Write-Line "Cannot rename moved file because the target file appeared during the move:" $script:UiColor.Error
+            Write-Line ("  {0}" -f $TargetPath) $script:UiColor.Path
+            Write-Log "ERROR" ("Rename target appeared after move and before rename: {0}" -f $TargetPath)
+            return 16
+        }
+
         if (Test-Path -LiteralPath $movedPath) {
             try {
                 Rename-Item -LiteralPath $movedPath -NewName $targetName -ErrorAction Stop
@@ -1871,7 +1980,13 @@ function Invoke-RobocopyMoveToExactPath {
                 if (-not (Test-RunningAsAdministrator)) {
                     $null = Invoke-AdminSwitch "Relaunching RoboSy as Administrator..."
                 }
+                return 16
             }
+        }
+        else {
+            Write-Line ("Moved file was not found for rename: {0}" -f $movedPath) $script:UiColor.Error
+            Write-Log "ERROR" ("Moved file missing before rename: {0}" -f $movedPath)
+            return 16
         }
     }
 
@@ -1898,10 +2013,10 @@ function Test-LinkCreationCapability {
 
     try {
         if ($ItemType -eq "Directory") {
-            New-Item -ItemType Directory -Path $targetPath -Force | Out-Null
+            New-RoboSyDirectory -Path $targetPath -Force | Out-Null
 
             try {
-                New-Item -ItemType SymbolicLink -Path $linkPath -Target $targetPath -ErrorAction Stop | Out-Null
+                New-RoboSySymbolicLink -Path $linkPath -Target $targetPath | Out-Null
                 return @{ CanCreate = $true; LinkKind = "SymbolicLink"; Message = $null }
             }
             catch {
@@ -1910,7 +2025,7 @@ function Test-LinkCreationCapability {
                 }
 
                 try {
-                    New-Item -ItemType Junction -Path $linkPath -Target $targetPath -ErrorAction Stop | Out-Null
+                    New-RoboSyJunction -Path $linkPath -Target $targetPath | Out-Null
                     return @{ CanCreate = $true; LinkKind = "Junction"; Message = "Directory symlink is not available; junction fallback is available." }
                 }
                 catch {
@@ -1922,7 +2037,7 @@ function Test-LinkCreationCapability {
         Set-Content -LiteralPath $targetPath -Value "robosy link preflight" -Encoding ASCII
 
         try {
-            New-Item -ItemType SymbolicLink -Path $linkPath -Target $targetPath -ErrorAction Stop | Out-Null
+            New-RoboSySymbolicLink -Path $linkPath -Target $targetPath | Out-Null
             return @{ CanCreate = $true; LinkKind = "SymbolicLink"; Message = $null }
         }
         catch {
@@ -1977,7 +2092,7 @@ function New-LinkSafe {
 
     $linkParent = Split-Path -Parent $LinkPath
     if (-not [string]::IsNullOrWhiteSpace($linkParent) -and -not (Test-Path -LiteralPath $linkParent)) {
-        New-Item -ItemType Directory -Path $linkParent -Force | Out-Null
+        New-RoboSyDirectory -Path $linkParent -Force | Out-Null
         Write-Log "INFO" ("Created link parent directory: {0}" -f $linkParent)
     }
 
@@ -1987,7 +2102,7 @@ function New-LinkSafe {
         Write-Blank
         Write-Log "INFO" ("Creating symbolic link: {0} -> {1}" -f $LinkPath, $TargetPath)
 
-        New-Item -ItemType SymbolicLink -Path $LinkPath -Target $TargetPath -ErrorAction Stop | Out-Null
+        New-RoboSySymbolicLink -Path $LinkPath -Target $TargetPath | Out-Null
         Write-Line "Symbolic link created." $script:UiColor.Success
         Write-PathStatusLog "Link path after create" (Get-PathStatus $LinkPath)
         return $true
@@ -2004,7 +2119,7 @@ function New-LinkSafe {
                 Write-Blank
                 Write-Log "INFO" ("Creating directory junction: {0} -> {1}" -f $LinkPath, $TargetPath)
 
-                New-Item -ItemType Junction -Path $LinkPath -Target $TargetPath -ErrorAction Stop | Out-Null
+                New-RoboSyJunction -Path $LinkPath -Target $TargetPath | Out-Null
                 Write-Line "Directory junction created." $script:UiColor.Success
                 Write-PathStatusLog "Link path after junction create" (Get-PathStatus $LinkPath)
                 return $true
@@ -2102,8 +2217,6 @@ function Invoke-MoveAndLinkJob {
     $targetPath = Resolve-LinkTargetPath -SourceInfo $SourceInfo -TargetInputInfo $TargetInputInfo
     $sourceStatus = Get-PathStatus $sourcePath
     $targetStatus = Get-PathStatus $targetPath
-    $currentSource = Get-ExistingItem $sourcePath
-    $currentTarget = Get-ExistingItem $targetPath
     $sourceExists = $sourceStatus.Exists
     $targetExists = $targetStatus.Exists
 
@@ -2142,7 +2255,6 @@ function Invoke-MoveAndLinkJob {
         }
 
         $sourceStatus = Get-PathStatus $sourcePath
-        $currentSource = Get-ExistingItem $sourcePath
         $sourceExists = $false
     }
 

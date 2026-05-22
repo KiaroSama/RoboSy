@@ -27,6 +27,7 @@ It is designed for users who want a simple Windows terminal workflow without man
 - Accept typed, pasted, or drag-and-dropped paths in normal terminal mode.
 - Relaunch as Administrator by typing `admin` at prompts.
 - Fall back from directory symbolic links to junctions when symlink creation is blocked.
+- Refuse symbolic links, junctions, and other reparse points as Move/Copy sources to avoid accidentally moving the real target's contents.
 - Print total elapsed time after each operation.
 - Write daily log files next to the script, with fallback to `%LOCALAPPDATA%\RoboSy\logs`.
 
@@ -44,6 +45,8 @@ RoboSy can move, copy, delete, and relink real files and folders. Test it on a s
 Fast Delete is permanent and does not use the Recycle Bin. Always double-check source and target paths before confirming an operation.
 
 RoboSy blocks drive roots, share roots, and protected root paths for destructive operations, but you should still review every path carefully.
+
+Move and Copy refuse source paths that are symbolic links, junctions, or other reparse points. Choose the real target path directly, or use Move + Symlink when you want to manage a link.
 
 ## Installation
 
@@ -94,6 +97,8 @@ Prompt shortcuts:
 | `admin` | Relaunch RoboSy as Administrator. |
 | `exit` or `quit` | Quit RoboSy. |
 
+For drag and drop, drop the path into the terminal. Existing paths may be accepted automatically after a short idle; press Enter if your terminal does not auto-accept the dropped path.
+
 ## Operations
 
 ### Move
@@ -102,11 +107,17 @@ The move operation uses `robocopy` to move a selected file or folder to a destin
 
 Use this when you want RoboSy to transfer data and remove the original copy after a successful move.
 
+If `robocopy` leaves an empty source folder behind after a directory move, RoboSy attempts to remove that empty source folder.
+
+Move uses `/XJ`, so nested junctions are excluded instead of being followed.
+
 ### Copy
 
 The copy operation uses `robocopy` to copy a selected file or folder to a destination path.
 
 Use this when you want to keep the original item in place.
+
+Copy uses `/XJ`, so nested junctions are excluded instead of being followed.
 
 ### Fast Delete
 
@@ -181,6 +192,7 @@ Runtime logs are ignored by Git and should not be published.
 | `RoboSy Admin.cmd` | Administrator launcher. |
 | `Install-RoboSyPath.ps1` | Adds RoboSy to the user `PATH` and installs the command shim. |
 | `README.md` | Project documentation. |
+| `CHANGELOG.md` | User-facing release history. |
 | `LICENSE` | MIT License text. |
 | `ATTRIBUTION.md` | Standalone attribution notice. |
 | `GITHUB_RELEASE_NOTES.md` | Draft release notes for GitHub. |
@@ -193,7 +205,7 @@ These local paths are intentionally ignored by Git:
 
 | Path or pattern | Reason |
 | --- | --- |
-| `.Commands/`, `.Comments/`, `Commands/` | Local request notes and working prompts. |
+| `.Commands/`, `.Comments/`, `Commands/`, `.claude/` | Local request notes, AI tool state, and working prompts. |
 | `logs/`, `log/`, `Logs/`, `Log/`, `*.log` | Runtime logs. |
 | `.env`, `.env.*`, keys, credentials, tokens, cookies, sessions | Local secrets and private configuration. |
 | `tmp/`, `temp/`, `Temp/`, backup files | Temporary local files. |

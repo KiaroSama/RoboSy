@@ -5,6 +5,8 @@
 .Comments/**
 Commands/
 Commands/**
+.claude/
+.claude/**
 Command *.txt
 local-notes/
 
@@ -36,6 +38,7 @@ temp/
 Temp/
 *.tmp
 *.temp
+.robosy-*.tmp
 *.bak
 *.backup
 *.old

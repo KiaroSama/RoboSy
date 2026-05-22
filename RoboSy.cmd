@@ -7,6 +7,7 @@ set "ROBOSY_SCRIPT=%~dp0RoboSy.ps1"
 
 if not exist "%ROBOSY_SCRIPT%" (
     echo RoboSy.ps1 was not found next to this command shim.
+    pause
     exit /b 1
 )
 

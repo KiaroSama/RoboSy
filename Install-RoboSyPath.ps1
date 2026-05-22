@@ -23,7 +23,7 @@ foreach ($entry in $entries) {
     }
 }
 
-New-Item -ItemType Directory -Path $shimDir -Force | Out-Null
+[System.IO.Directory]::CreateDirectory($shimDir) | Out-Null
 
 $shimLines = @(
     "@echo off",
@@ -36,7 +36,12 @@ $shimLines = @(
     "call ""%ROBOSY_TARGET%"" %*",
     "exit /b %errorlevel%"
 )
-Set-Content -LiteralPath $shimPath -Value $shimLines -Encoding ASCII
+try {
+    Set-Content -LiteralPath $shimPath -Value $shimLines -Encoding OEM -ErrorAction Stop
+}
+catch {
+    Set-Content -LiteralPath $shimPath -Value $shimLines -Encoding Default -ErrorAction Stop
+}
 Write-Host "Installed command shim:" -ForegroundColor Green
 Write-Host "  $shimPath" -ForegroundColor Cyan
 
