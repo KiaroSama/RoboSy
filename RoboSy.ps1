@@ -196,6 +196,9 @@ $script:PromptOptionAnsiColor = ("{0}[38;2;0;255;0m" -f [char]27)
 $script:PromptNavBackAnsiColor = ("{0}[38;2;255;160;0m" -f [char]27)
 $script:PromptNavAdminAnsiColor = ("{0}[38;2;255;70;90m" -f [char]27)
 $script:PromptNavQuitAnsiColor = ("{0}[38;2;0;190;255m" -f [char]27)
+# Yellow hint color (ANSI 256-color 221) used for the parenthesized description
+# lines shown under each prompt/command.
+$script:HintAnsiColor = ("{0}[38;5;221m" -f [char]27)
 
 function Initialize-LogPath {
     if ($script:LogInitialized) { return }
@@ -327,6 +330,21 @@ function Write-LogPathLine {
     }
 
     Write-Line $Text Yellow
+}
+
+function Write-Hint {
+    param([AllowNull()][string]$Text = "")
+
+    if ($null -eq $Text) { $Text = "" }
+    $line = "({0})" -f $Text
+
+    if (Test-AnsiOutputAvailable) {
+        $reset = "{0}[0m" -f [char]27
+        Write-Host ("{0}{1}{2}" -f $script:HintAnsiColor, $line, $reset)
+        return
+    }
+
+    Write-Line $line Yellow
 }
 
 function Write-ColoredPromptSegment {
@@ -1290,20 +1308,20 @@ function Read-SourcePath {
         switch ($Mode) {
             "LINK" {
                 Write-Line "Enter the original path where the link should exist." $script:UiColor.Text
-                Write-Line "If this path currently contains a real file/folder, it can be moved to the target path first." $script:UiColor.Muted
-                Write-Line "If this path does not exist, the script will create only the link after you enter an existing target." $script:UiColor.Muted
+                Write-Hint "If this path currently contains a real file/folder, it can be moved to the target path first."
+                Write-Hint "If this path does not exist, the script will create only the link after you enter an existing target."
             }
             "DELETE" {
                 Write-Line "Enter the existing file or folder to permanently delete." $script:UiColor.Text
-                Write-Line "This bypasses the Recycle Bin and uses robocopy purge for faster folder deletion." $script:UiColor.Warning
+                Write-Hint "This bypasses the Recycle Bin and uses robocopy purge for faster folder deletion."
             }
             default {
                 Write-Line "Enter the existing source path." $script:UiColor.Text
-                Write-Line "The source can be a folder or one single file." $script:UiColor.Muted
+                Write-Hint "The source can be a folder or one single file."
             }
         }
 
-        Write-Line "Type, paste, or drag/drop a path, then press Enter to confirm." $script:UiColor.Muted
+        Write-Hint "Type, paste, or drag/drop a path, then press Enter to confirm."
         Write-Blank
 
         $prompt = if ($Mode -eq "DELETE") { "Delete path" } else { "Source" }
@@ -1370,17 +1388,17 @@ function Read-DestinationPath {
 
         if ($Mode -eq "LINK") {
             Write-Line "Enter the real target path." $script:UiColor.Text
-            Write-Line "If the original path exists and this target path is missing, the original item is moved here first." $script:UiColor.Muted
-            Write-Line "If the original path is missing, this target path must already exist." $script:UiColor.Muted
-            Write-Line "If you enter an existing folder while moving an existing item, the item is moved inside it with the same name." $script:UiColor.Muted
+            Write-Hint "If the original path exists and this target path is missing, the original item is moved here first."
+            Write-Hint "If the original path is missing, this target path must already exist."
+            Write-Hint "If you enter an existing folder while moving an existing item, the item is moved inside it with the same name."
         }
         else {
             Write-Line "Enter the destination folder path." $script:UiColor.Text
-            Write-Line "Robocopy treats this as a folder. For one file, the original file name is kept." $script:UiColor.Muted
-            Write-Line "If the destination folder does not exist, robocopy will create it." $script:UiColor.Muted
+            Write-Hint "Robocopy treats this as a folder. For one file, the original file name is kept."
+            Write-Hint "If the destination folder does not exist, robocopy will create it."
 
             if ($SourceInfo.Type -eq "Directory") {
-                Write-Line "To create a same-named folder at the destination, include that folder name in the path." $script:UiColor.Muted
+                Write-Hint "To create a same-named folder at the destination, include that folder name in the path."
             }
         }
 
