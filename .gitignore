@@ -5,10 +5,29 @@
 .Comments/**
 Commands/
 Commands/**
-.claude/
-.claude/**
 Command *.txt
 local-notes/
+
+# Local-only and AI assistant directories/files (never publish)
+.ignoreme
+.ignoreme/
+.ignoreme/**
+**/.ignoreme
+**/.ignoreme/**
+.claude/
+.claude/**
+**/.claude/
+.kiro/
+.kiro/**
+**/.kiro/
+.codex/
+.codex/**
+**/.codex/
+/secrets.md
+secrets.md
+**/secrets.md
+explain-AI.md
+**/explain-AI.md
 
 # Logs
 logs/

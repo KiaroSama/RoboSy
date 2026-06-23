@@ -1,0 +1,58 @@
+name: Lint
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**/*.ps1"
+      - "PSScriptAnalyzerSettings.psd1"
+      - ".github/workflows/lint.yml"
+  pull_request:
+    paths:
+      - "**/*.ps1"
+      - "PSScriptAnalyzerSettings.psd1"
+      - ".github/workflows/lint.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: PSScriptAnalyzer
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module -Name PSScriptAnalyzer -Scope CurrentUser -Force
+
+      - name: Parse check (syntax)
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem -Path . -Recurse -Filter *.ps1 | ForEach-Object {
+            $tokens = $null; $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors) {
+              $failed = $true
+              Write-Host "Parse errors in $($_.FullName):" -ForegroundColor Red
+              $errors | ForEach-Object { Write-Host ("  {0} (line {1})" -f $_.Message, $_.Extent.StartLineNumber) }
+            }
+          }
+          if ($failed) { throw "PowerShell parse errors were found." }
+          Write-Host "All .ps1 files parsed successfully."
+
+      - name: Run PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          $results = Invoke-ScriptAnalyzer -Path . -Recurse -Settings .\PSScriptAnalyzerSettings.psd1
+          if ($results) {
+            $results | Format-Table RuleName, Severity, ScriptName, Line, Message -AutoSize | Out-String -Width 200 | Write-Host
+            throw "PSScriptAnalyzer reported $($results.Count) issue(s)."
+          }
+          Write-Host "PSScriptAnalyzer found no issues."
