@@ -192,7 +192,7 @@ $script:HeaderWidth = 120
 # ANSI escape equivalent of "\033[38;2;255;50;115m".
 $script:HeaderAnsiColor = ("{0}[38;2;255;50;115m" -f [char]27)
 $script:LogPathAnsiColor = ("{0}[38;2;255;255;0m" -f [char]27)
-$script:PromptOptionAnsiColor = ("{0}[38;2;0;255;0m" -f [char]27)
+$script:PromptOptionAnsiColor = ("{0}[92m" -f [char]27)
 $script:PromptNavBackAnsiColor = ("{0}[38;5;166m" -f [char]27)
 $script:PromptNavAdminAnsiColor = ("{0}[38;2;255;70;90m" -f [char]27)
 $script:PromptNavQuitAnsiColor = ("{0}[38;5;32m" -f [char]27)
