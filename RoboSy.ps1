@@ -194,7 +194,7 @@ $script:HeaderAnsiColor = ("{0}[38;2;255;50;115m" -f [char]27)
 $script:LogPathAnsiColor = ("{0}[38;2;255;255;0m" -f [char]27)
 $script:PromptOptionAnsiColor = ("{0}[92m" -f [char]27)
 $script:PromptNavBackAnsiColor = ("{0}[38;5;166m" -f [char]27)
-$script:PromptNavAdminAnsiColor = ("{0}[38;2;16;67;222m" -f [char]27)
+$script:PromptNavAdminAnsiColor = ("{0}[38;2;80;140;255m" -f [char]27)
 $script:PromptNavQuitAnsiColor = ("{0}[38;5;32m" -f [char]27)
 # Yellow hint color (ANSI 256-color 221) used for the parenthesized description
 # lines shown under each prompt/command.
@@ -399,7 +399,7 @@ function Write-ConsolePrompt {
         Write-ColoredPromptSegment "{" "" $script:UiColor.Text
         Write-ColoredPromptSegment "back=0" $script:PromptNavBackAnsiColor DarkYellow
         Write-ColoredPromptSegment ", " "" $script:UiColor.Text
-        Write-ColoredPromptSegment "Run as admin=admin" $script:PromptNavAdminAnsiColor DarkBlue
+        Write-ColoredPromptSegment "Run as admin=admin" $script:PromptNavAdminAnsiColor Blue
         Write-ColoredPromptSegment ", " "" $script:UiColor.Text
         Write-ColoredPromptSegment "quit= exit" $script:PromptNavQuitAnsiColor Blue
         Write-ColoredPromptSegment " }" "" $script:UiColor.Text
