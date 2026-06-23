@@ -188,7 +188,7 @@ $script:Breadcrumb = New-Object System.Collections.Generic.List[object]
 # appended below the previous output so earlier prompts stay visible.
 $script:HeaderShownOnce = $false
 $script:HeaderTitle = "Robocopy + Symlink (RoboSy)"
-$script:HeaderWidth = 60
+$script:HeaderWidth = 120
 # ANSI escape equivalent of "\033[38;2;255;50;115m".
 $script:HeaderAnsiColor = ("{0}[38;2;255;50;115m" -f [char]27)
 $script:LogPathAnsiColor = ("{0}[38;2;255;255;0m" -f [char]27)
