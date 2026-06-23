@@ -544,11 +544,10 @@ function Show-Header {
     }
 
     # The terminal is never cleared. The full title banner and log path are
-    # printed once; every later step just adds a short separator and the
-    # "Selections so far" block below the existing terminal output.
+    # printed once; every later step just adds the "Selections so far" block
+    # below the existing terminal output, with no repeated separator line.
     if ($script:HeaderShownOnce) {
         Write-Blank
-        Write-HeaderAccentLine ("=" * $script:HeaderWidth)
         Write-Breadcrumb
         return
     }
