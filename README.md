@@ -24,7 +24,9 @@ It is designed for users who want a simple Windows terminal workflow without man
 - Copy files and folders with `robocopy`.
 - Permanently delete files or folders without using the Recycle Bin.
 - Move data to a new location and leave a symbolic link or junction at the original path.
-- Accept typed, pasted, or drag-and-dropped paths in normal terminal mode.
+- Accept typed, pasted, or drag-and-dropped paths in normal terminal mode, confirmed with Enter (no auto-accept).
+- Keep your previous selections visible at the top of each step instead of clearing the screen.
+- Ask for an explicit confirmation before every move, copy, delete, or link job runs.
 - Relaunch as Administrator by typing `admin` at prompts.
 - Fall back from directory symbolic links to junctions when symlink creation is blocked.
 - Refuse symbolic links, junctions, and other reparse points as Move/Copy sources to avoid accidentally moving the real target's contents.
@@ -97,7 +99,9 @@ Prompt shortcuts:
 | `admin` | Relaunch RoboSy as Administrator. |
 | `exit` or `quit` | Quit RoboSy. |
 
-For drag and drop, drop the path into the terminal. Existing paths may be accepted automatically after a short idle; press Enter if your terminal does not auto-accept the dropped path.
+For drag and drop, drop the path into the terminal, then press Enter to confirm it. RoboSy never auto-accepts a path, so you always stay in control of each step.
+
+RoboSy keeps your completed selections (mode, source, destination) visible in a "Selections so far" block at the top of every step, so you can see the previous steps as you move forward. Before any job runs, RoboSy shows a final summary and asks you to confirm.
 
 ## Operations
 
@@ -198,6 +202,8 @@ Runtime logs are ignored by Git and should not be published.
 | `GITHUB_RELEASE_NOTES.md` | Draft release notes for GitHub. |
 | `.gitignore` | Excludes local logs, notes, secrets, cache, temporary files, and generated output. |
 | `.gitattributes` | Repository text and line-ending settings. |
+| `PSScriptAnalyzerSettings.psd1` | PSScriptAnalyzer rule configuration used locally and in CI. |
+| `.github/workflows/lint.yml` | GitHub Actions workflow that parses and analyzes the PowerShell files. |
 
 ## Ignored Local Data
 
@@ -205,7 +211,8 @@ These local paths are intentionally ignored by Git:
 
 | Path or pattern | Reason |
 | --- | --- |
-| `.Commands/`, `.Comments/`, `Commands/`, `.claude/` | Local request notes, AI tool state, and working prompts. |
+| `.Commands/`, `.Comments/`, `Commands/`, `.claude/`, `.kiro/`, `.codex/`, `.ignoreme/` | Local request notes, AI tool state, and working prompts. |
+| `secrets.md`, `explain-AI.md` | Local-only secret registry and private notes that must never be published. |
 | `logs/`, `log/`, `Logs/`, `Log/`, `*.log` | Runtime logs. |
 | `.env`, `.env.*`, keys, credentials, tokens, cookies, sessions | Local secrets and private configuration. |
 | `tmp/`, `temp/`, `Temp/`, backup files | Temporary local files. |
@@ -213,6 +220,19 @@ These local paths are intentionally ignored by Git:
 | `output/`, `downloads/`, `dist/`, `build/`, `processed/`, `remuxed/` | Generated output. |
 | `.vscode/`, `.idea/`, `*.code-workspace` | Local editor settings. |
 | OS metadata files | Local operating-system artifacts. |
+
+## Development
+
+RoboSy is linted with [PSScriptAnalyzer](https://learn.microsoft.com/powershell/utility-modules/psscriptanalyzer/overview) using the rules in `PSScriptAnalyzerSettings.psd1`. The same checks run in GitHub Actions (`.github/workflows/lint.yml`).
+
+Run the checks locally before pushing:
+
+```powershell
+Install-Module -Name PSScriptAnalyzer -Scope CurrentUser -Force
+Invoke-ScriptAnalyzer -Path . -Recurse -Settings .\PSScriptAnalyzerSettings.psd1
+```
+
+A clean run reports no issues.
 
 ## Troubleshooting
 

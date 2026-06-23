@@ -20,9 +20,9 @@
 # Drag and drop:
 #   - You can type a path normally.
 #   - You can drag/drop an existing file or folder into the console.
-#   - For dropped existing paths, the script detects the path and continues
-#     automatically after the paste/drop finishes. If auto-detection does not
-#     trigger in your terminal, press Enter.
+#   - After typing, pasting, or dropping a path, press Enter to confirm it.
+#     RoboSy never auto-accepts a path; you stay in control of every step.
+#   - Each job also asks for a final confirmation before it runs.
 #   - Windows blocks drag/drop from normal Explorer windows into elevated
 #     Administrator terminals. Run RoboSy normally when you need drag/drop.
 #
@@ -181,8 +181,14 @@ $script:UiColor = @{
 $script:LogInitialized = $false
 $script:LogDirectory = $null
 $script:LogFilePath = $null
+# Ordered list of completed selections shown at the top of every step so the
+# previous steps stay visible after the screen is redrawn.
+$script:Breadcrumb = New-Object System.Collections.Generic.List[object]
+# The screen is cleared only once at session start. After that every step is
+# appended below the previous output so earlier prompts stay visible.
+$script:HeaderShownOnce = $false
 $script:HeaderTitle = "Robocopy + Symlink (RoboSy)"
-$script:HeaderWidth = 120
+$script:HeaderWidth = 60
 # ANSI escape equivalent of "\033[38;2;255;50;115m".
 $script:HeaderAnsiColor = ("{0}[38;2;255;50;115m" -f [char]27)
 $script:LogPathAnsiColor = ("{0}[38;2;255;255;0m" -f [char]27)
@@ -431,15 +437,6 @@ function Write-TotalElapsedTime {
     Write-Line ("Total time elapsed: {0}" -f (Format-ElapsedTime $elapsed)) $script:UiColor.Accent
 }
 
-function Clear-ConsoleScreen {
-    try {
-        Clear-Host
-    }
-    catch {
-        Write-Blank
-    }
-}
-
 function Write-MenuOption {
     param(
         [string]$Key,
@@ -491,14 +488,76 @@ function Write-PathBlock {
     Write-Line ("  {0}" -f $Path) $script:UiColor.Path
 }
 
-function Show-Header {
-    Clear-ConsoleScreen
-    Write-HeaderAccentLine (Format-HeaderTitleLine)
-    Write-HeaderAccentLine ("=" * $script:HeaderWidth)
+function Get-ModeDisplayName {
+    param([string]$Mode)
 
+    switch ($Mode) {
+        "MOVE" { return "Move" }
+        "COPY" { return "Copy" }
+        "DELETE" { return "Fast Delete" }
+        "LINK" { return "Move + Symlink" }
+        default { return $Mode }
+    }
+}
+
+function New-BreadcrumbStep {
+    param(
+        [string]$Label,
+        [AllowNull()][string]$Value,
+        [ConsoleColor]$Color = [ConsoleColor]::Cyan
+    )
+
+    if ($null -eq $Value) { $Value = "" }
+    return [pscustomobject]@{ Label = $Label; Value = $Value; Color = $Color }
+}
+
+function Reset-Breadcrumb {
+    $script:Breadcrumb = New-Object System.Collections.Generic.List[object]
+}
+
+function Set-Breadcrumb {
+    param([AllowNull()][object[]]$Steps)
+
+    Reset-Breadcrumb
+    if ($null -ne $Steps) {
+        foreach ($step in $Steps) {
+            if ($null -ne $step) {
+                $script:Breadcrumb.Add($step)
+            }
+        }
+    }
+}
+
+function Write-Breadcrumb {
+    if ($script:Breadcrumb.Count -eq 0) { return }
+
+    Write-Line "Selections so far:" $script:UiColor.Accent
+    foreach ($step in $script:Breadcrumb) {
+        Write-LabelValue $step.Label $step.Value $step.Color
+    }
+    Write-Blank
+}
+
+function Show-Header {
     if (-not $script:LogInitialized) {
         Initialize-LogPath
     }
+
+    # The terminal is never cleared. The full title banner and log path are
+    # printed once; every later step just adds a short separator and the
+    # "Selections so far" block below the existing terminal output.
+    if ($script:HeaderShownOnce) {
+        Write-Blank
+        Write-HeaderAccentLine ("=" * $script:HeaderWidth)
+        Write-Breadcrumb
+        return
+    }
+
+    $script:HeaderShownOnce = $true
+
+    Write-Blank
+    Write-HeaderAccentLine (Format-HeaderTitleLine)
+    Write-HeaderAccentLine ("=" * $script:HeaderWidth)
 
     if ([string]::IsNullOrWhiteSpace($script:LogFilePath)) {
         Write-Line "Logging to: <disabled - no writable log path found>" $script:UiColor.Warning
@@ -508,6 +567,7 @@ function Show-Header {
     }
 
     Write-Blank
+    Write-Breadcrumb
 }
 
 function Normalize-UserPath {
@@ -881,21 +941,9 @@ function Get-RobocopyExitDescription {
     }
 }
 
-function Test-ExistingPathInput {
-    param([AllowNull()][string]$Text)
-
-    if ([string]::IsNullOrWhiteSpace($Text)) { return $false }
-
-    $path = Normalize-UserPath $Text
-    if ([string]::IsNullOrWhiteSpace($path)) { return $false }
-
-    return (Test-Path -LiteralPath $path)
-}
-
 function Read-ConsoleText {
     param(
         [string]$Prompt,
-        [switch]$AutoAcceptExistingPath,
         [switch]$HideNavigation
     )
 
@@ -914,16 +962,10 @@ function Read-ConsoleText {
     Write-ConsolePrompt -Prompt $Prompt -HideNavigation:$HideNavigation
 
     $buffer = New-Object System.Text.StringBuilder
-    $lastKeyAt = Get-Date
-    $fastKeyCount = 0
-    $dropLikeInput = $false
 
     while ($true) {
         if ([Console]::KeyAvailable) {
-            $now = Get-Date
             $key = [Console]::ReadKey($true)
-            $delta = ($now - $lastKeyAt).TotalMilliseconds
-            $lastKeyAt = $now
 
             if (($key.Modifiers -band [ConsoleModifiers]::Control) -and $key.Key -eq [ConsoleKey]::C) {
                 throw "Input cancelled with Ctrl+C."
@@ -948,7 +990,6 @@ function Read-ConsoleText {
                         $null = $buffer.Remove($buffer.Length - 1, 1)
                         Write-Host "`b `b" -NoNewline
                     }
-                    $fastKeyCount = 0
                     continue
                 }
                 ([ConsoleKey]::Escape) {
@@ -956,45 +997,20 @@ function Read-ConsoleText {
                         $null = $buffer.Remove($buffer.Length - 1, 1)
                         Write-Host "`b `b" -NoNewline
                     }
-                    $fastKeyCount = 0
                     continue
                 }
                 default {
                     if ($key.KeyChar -ne [char]0 -and -not [char]::IsControl($key.KeyChar)) {
                         $null = $buffer.Append($key.KeyChar)
                         Write-Host $key.KeyChar -NoNewline
-
-                        if ($delta -lt 70) {
-                            $fastKeyCount++
-                        }
-                        else {
-                            $fastKeyCount = 0
-                        }
-
-                        if ($fastKeyCount -ge 5) {
-                            $dropLikeInput = $true
-                        }
                     }
                 }
             }
         }
         else {
+            # No auto-accept: always wait for the user to press Enter, even after
+            # a drag/drop paste. This keeps the user in control of every step.
             Start-Sleep -Milliseconds 45
-
-            if ($AutoAcceptExistingPath -and $buffer.Length -gt 0) {
-                $text = $buffer.ToString()
-                $trimmed = $text.Trim()
-                $isWrapped = (($trimmed.StartsWith('"') -and $trimmed.EndsWith('"')) -or ($trimmed.StartsWith("'") -and $trimmed.EndsWith("'")))
-                $idleMs = ((Get-Date) - $lastKeyAt).TotalMilliseconds
-
-                if (($dropLikeInput -or $isWrapped) -and $idleMs -ge 300 -and (Test-ExistingPathInput $text)) {
-                    Write-Host ""
-                    $detected = Normalize-UserPath $text
-                    Write-Line ("Detected path: {0}" -f $detected) $script:UiColor.Success
-                    Start-Sleep -Milliseconds 250
-                    return $text
-                }
-            }
         }
     }
 }
@@ -1226,6 +1242,7 @@ function Invoke-RobocopyCommand {
 
 function Read-MainChoice {
     while ($true) {
+        Reset-Breadcrumb
         Show-Header
         Write-MenuOption "1" "Move" "Move a folder tree or a single file with robocopy." Magenta -Default -AnsiColor ("{0}[38;2;210;170;255m" -f [char]27)
         Write-MenuOption "2" "Copy" "Copy a folder tree or a single file with robocopy." Green
@@ -1264,36 +1281,34 @@ function Read-MainChoice {
 function Read-SourcePath {
     param([string]$Mode)
 
+    Set-Breadcrumb @(
+        (New-BreadcrumbStep "Mode" (Get-ModeDisplayName $Mode) $script:UiColor.Accent)
+    )
+
     while ($true) {
         Show-Header
 
         switch ($Mode) {
             "LINK" {
-                Write-Line "Mode: MOVE + SYMBOLIC LINK" $script:UiColor.Accent
-                Write-Blank
                 Write-Line "Enter the original path where the link should exist." $script:UiColor.Text
                 Write-Line "If this path currently contains a real file/folder, it can be moved to the target path first." $script:UiColor.Muted
                 Write-Line "If this path does not exist, the script will create only the link after you enter an existing target." $script:UiColor.Muted
             }
             "DELETE" {
-                Write-Line "Mode: FAST DIRECT DELETE" $script:UiColor.Error
-                Write-Blank
                 Write-Line "Enter the existing file or folder to permanently delete." $script:UiColor.Text
                 Write-Line "This bypasses the Recycle Bin and uses robocopy purge for faster folder deletion." $script:UiColor.Warning
             }
             default {
-                Write-Line ("Mode: {0}" -f $Mode) $script:UiColor.Accent
-                Write-Blank
                 Write-Line "Enter the existing source path." $script:UiColor.Text
                 Write-Line "The source can be a folder or one single file." $script:UiColor.Muted
             }
         }
 
-        Write-Line "Type, paste, or drag/drop a path, then press Enter." $script:UiColor.Muted
+        Write-Line "Type, paste, or drag/drop a path, then press Enter to confirm." $script:UiColor.Muted
         Write-Blank
 
         $prompt = if ($Mode -eq "DELETE") { "Delete path" } else { "Source" }
-        $inputPath = Read-ConsoleText $prompt -AutoAcceptExistingPath
+        $inputPath = Read-ConsoleText $prompt
         if (Test-ExitInput $inputPath) { return @{ Action = "EXIT" } }
         if (Test-BackInput $inputPath) { return @{ Action = "BACK" } }
 
@@ -1345,22 +1360,22 @@ function Read-DestinationPath {
         [hashtable]$SourceInfo
     )
 
+    $sourceLabel = if ($Mode -eq "LINK") { "Original/link" } else { "Source" }
+    Set-Breadcrumb @(
+        (New-BreadcrumbStep "Mode" (Get-ModeDisplayName $Mode) $script:UiColor.Accent),
+        (New-BreadcrumbStep $sourceLabel $SourceInfo.Path $script:UiColor.Path)
+    )
+
     while ($true) {
         Show-Header
 
         if ($Mode -eq "LINK") {
-            Write-Line "Mode: MOVE + SYMBOLIC LINK" $script:UiColor.Accent
-            Write-PathBlock "Original/link path" $SourceInfo.Path
-            Write-Blank
             Write-Line "Enter the real target path." $script:UiColor.Text
             Write-Line "If the original path exists and this target path is missing, the original item is moved here first." $script:UiColor.Muted
             Write-Line "If the original path is missing, this target path must already exist." $script:UiColor.Muted
             Write-Line "If you enter an existing folder while moving an existing item, the item is moved inside it with the same name." $script:UiColor.Muted
         }
         else {
-            Write-Line ("Mode: {0}" -f $Mode) $script:UiColor.Accent
-            Write-PathBlock "Source" $SourceInfo.Path
-            Write-Blank
             Write-Line "Enter the destination folder path." $script:UiColor.Text
             Write-Line "Robocopy treats this as a folder. For one file, the original file name is kept." $script:UiColor.Muted
             Write-Line "If the destination folder does not exist, robocopy will create it." $script:UiColor.Muted
@@ -1371,7 +1386,7 @@ function Read-DestinationPath {
         }
 
         Write-Blank
-        $inputPath = Read-ConsoleText "Destination/target" -AutoAcceptExistingPath
+        $inputPath = Read-ConsoleText "Destination/target"
         if (Test-ExitInput $inputPath) { return @{ Action = "EXIT" } }
         if (Test-BackInput $inputPath) { return @{ Action = "BACK" } }
 
@@ -1466,8 +1481,14 @@ function Invoke-RobocopyJob {
 
     $startedAt = Get-Date
 
+    Set-Breadcrumb @(
+        (New-BreadcrumbStep "Mode" (Get-ModeDisplayName $Mode) $script:UiColor.Accent),
+        (New-BreadcrumbStep "Source" $SourceInfo.Path $script:UiColor.Path),
+        (New-BreadcrumbStep "Destination" $DestinationInfo.Path $script:UiColor.Path)
+    )
+
     Show-Header
-    Write-Line "Preparing robocopy job..." $script:UiColor.Accent
+    Write-Line "Review the job below before it runs." $script:UiColor.Accent
     Write-Blank
 
     if (-not (Assert-RobocopyAvailable)) {
@@ -1477,10 +1498,7 @@ function Invoke-RobocopyJob {
 
     $robocopyArgs = Get-StandardRobocopyArgs -Mode $Mode -SourceInfo $SourceInfo -DestinationFolder $DestinationInfo.Path
 
-    Write-LabelValue "Mode" $Mode $script:UiColor.Accent
     Write-LabelValue "Source type" $SourceInfo.Type $script:UiColor.Text
-    Write-LabelValue "Source" $SourceInfo.Path $script:UiColor.Path
-    Write-LabelValue "Destination" $DestinationInfo.Path $script:UiColor.Path
 
     Write-PathStatusLog "Standard job source check" $SourceInfo
     Write-PathStatusLog "Standard job destination check" $DestinationInfo
@@ -1489,6 +1507,15 @@ function Invoke-RobocopyJob {
     if ($Mode -eq "MOVE") {
         Write-Blank
         Write-Line "Move mode deletes source items after robocopy confirms they were copied." $script:UiColor.Warning
+    }
+
+    Write-Blank
+    $confirm = Read-YesNo ("Run this {0} job now" -f (Get-ModeDisplayName $Mode)) $false
+    if ($confirm -is [string] -and $confirm -eq "EXIT") { return "EXIT" }
+    if ($confirm -is [string] -and $confirm -eq "BACK") { return "BACK" }
+    if (-not $confirm) {
+        Write-Log "INFO" ("Job canceled by user before execution: mode={0}" -f $Mode)
+        return "MENU"
     }
 
     Write-Blank
@@ -1776,15 +1803,19 @@ function Invoke-FastDeleteJob {
 
     $startedAt = Get-Date
 
+    Set-Breadcrumb @(
+        (New-BreadcrumbStep "Mode" (Get-ModeDisplayName "DELETE") $script:UiColor.Error),
+        (New-BreadcrumbStep "Delete target" $DeleteInfo.Path $script:UiColor.Path)
+    )
+
     Show-Header
-    Write-Line "Preparing fast direct delete job..." $script:UiColor.Error
+    Write-Line "Review the delete target below before it runs." $script:UiColor.Error
     Write-Blank
 
     $deleteStatus = Get-PathStatus $DeleteInfo.Path
 
     Write-LabelValue "Target type" $deleteStatus.Type $script:UiColor.Text
     Write-LabelValue "Target kind" $deleteStatus.Kind $script:UiColor.Text
-    Write-LabelValue "Delete target" $deleteStatus.Path $script:UiColor.Path
     Write-PathStatusLog "Fast delete target check" $deleteStatus
     Write-Log "INFO" ("Fast delete start: {0}" -f (Format-PathStatusForLog $deleteStatus))
 
@@ -2209,10 +2240,6 @@ function Invoke-MoveAndLinkJob {
 
     $startedAt = Get-Date
 
-    Show-Header
-    Write-Line "Preparing move + symbolic link job..." $script:UiColor.Accent
-    Write-Blank
-
     $sourcePath = $SourceInfo.Path
     $targetPath = Resolve-LinkTargetPath -SourceInfo $SourceInfo -TargetInputInfo $TargetInputInfo
     $sourceStatus = Get-PathStatus $sourcePath
@@ -2220,8 +2247,13 @@ function Invoke-MoveAndLinkJob {
     $sourceExists = $sourceStatus.Exists
     $targetExists = $targetStatus.Exists
 
-    Write-LabelValue "Original/link" $sourcePath $script:UiColor.Path
-    Write-LabelValue "Real target" $targetPath $script:UiColor.Path
+    Set-Breadcrumb @(
+        (New-BreadcrumbStep "Mode" (Get-ModeDisplayName "LINK") $script:UiColor.Accent),
+        (New-BreadcrumbStep "Original/link" $sourcePath $script:UiColor.Path),
+        (New-BreadcrumbStep "Real target" $targetPath $script:UiColor.Path)
+    )
+    Show-Header
+    Write-Line "Review the move + symbolic link job below before it runs." $script:UiColor.Accent
     Write-Blank
 
     Write-PathStatusLog "Move+Link original/link check" $sourceStatus
@@ -2343,6 +2375,15 @@ function Invoke-MoveAndLinkJob {
     else {
         Write-Line "The original path is missing and the real target exists." $script:UiColor.Success
         Write-Line "The script will create only the symbolic link." $script:UiColor.Muted
+        Write-Blank
+
+        $confirm = Read-YesNo "Create the symbolic link now" $false
+        if ($confirm -is [string] -and $confirm -eq "EXIT") { return "EXIT" }
+        if ($confirm -is [string] -and $confirm -eq "BACK") { return "BACK" }
+        if (-not $confirm) {
+            Write-Log "INFO" ("Move+Link canceled by user before link creation: {0} -> {1}" -f $sourcePath, $targetPath)
+            return "MENU"
+        }
         Write-Blank
     }
 

@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.2.0 - 2026-06-24
+
+### Changed
+
+- Path prompts no longer auto-accept dragged or pasted paths. Every source, destination, and target path must now be confirmed with Enter so you stay in control of each step.
+- Move, Copy, Fast Delete, and Move + Symlink jobs now show a final summary and ask for an explicit confirmation before they run.
+- Completed selections (mode, source, destination/target) now stay visible in a "Selections so far" block at the top of every step instead of being cleared on each screen redraw.
+
+### Added
+
+- Added `PSScriptAnalyzerSettings.psd1` and a `Lint` GitHub Actions workflow that parses and analyzes all PowerShell files on push and pull request.
+- Expanded `.gitignore` to protect local-only and assistant paths (`.ignoreme`, `.kiro/`, `.codex/`, `secrets.md`, `explain-AI.md`).
+
+### Removed
+
+- Removed the idle-based drag/drop auto-accept input path and its now-unused helper.
+
 ## v1.1.0 - 2026-05-23
 
 ### Added
