@@ -1,39 +1,35 @@
-# RoboSy v1.1.0
+# RoboSy v1.2.0
 
-Suggested tag: `v1.1.0`
+Suggested tag: `v1.2.0`
 
-RoboSy v1.1.0 is a safety and reliability update for Move, Copy, Move + Symlink, path handling, and release documentation.
+RoboSy v1.2.0 is a usability and safety update focused on the interactive prompt
+flow, clearer colors, and stronger repository tooling.
 
 ## Added
 
-- Added `CHANGELOG.md` for release history.
-- Added documentation for Move/Copy reparse-point source refusal and `/XJ` nested junction behavior.
+- Added `PSScriptAnalyzerSettings.psd1` and a `Lint` GitHub Actions workflow that parses and analyzes all PowerShell files on push and pull request.
+- Added GitHub community files: `CONTRIBUTING.md`, `SECURITY.md`, issue and pull request templates, a Dependabot configuration, and `.editorconfig`.
+- Expanded `.gitignore` to protect local-only and assistant paths (`.ignoreme`, `.kiro/`, `.codex/`, `secrets.md`, `explain-AI.md`).
 
 ## Changed
 
-- Move and Copy now reject symbolic links, junctions, and other reparse-point paths as sources to avoid following source links.
-- Directory Move now attempts to remove an empty source folder if `robocopy` leaves the source root behind.
-- Move + Symlink now treats empty-source cleanup failure as a fatal move error because the original link path cannot be created while the real folder remains.
-- Drag-and-drop path auto-accept is wired into source and destination prompts again.
-- The installer writes the command shim with OEM encoding when available, with a fallback for older PowerShell versions.
-- The normal launcher now pauses when `RoboSy.ps1` is missing, matching the Administrator launcher behavior.
+- Paths are never auto-accepted. Every source, destination, and target path must be confirmed with Enter, so you stay in control of each step.
+- Move, Copy, Fast Delete, and Move + Symlink jobs now show a final summary and ask for an explicit confirmation before they run.
+- Completed selections stay visible in a "Selections so far" block, and the terminal is no longer cleared on each step. The title banner and separator line are shown once at startup.
+- Prompt description lines are now shown as parenthesized yellow hints.
+- Recolored the navigation prompt: orange `back=0`, blue `quit`, lime-green `Run as admin`, bright-green default option markers such as `[1]`, and uncolored braces.
 
 ## Fixed
 
-- Fixed a critical Move/Copy safety issue where a symlink or junction source could cause `robocopy` to move or copy the real target contents.
-- Fixed Move + Symlink file relocation so an existing rename target is detected before link creation.
-- Fixed wildcard-sensitive `New-Item -Path` usage for paths containing characters such as `[` and `]`.
-- Fixed the destination warning so file-looking destination paths are shown for directory sources too.
-- Removed unused internal variables reported by static analysis.
-- Added ignore coverage for `.claude/` and RoboSy temporary write-test files.
+- Fixed the screen-clearing behavior that hid previous prompts and made it hard to review earlier steps.
 
 ## Removed
 
-- No user-facing features were removed.
+- Removed the idle-based drag/drop auto-accept input path and its now-unused helper.
 
 ## Breaking Changes
 
-- Move and Copy no longer accept symbolic links, junctions, or other reparse points as source paths. Choose the real target path directly, or use Move + Symlink when managing a link.
+- None. Existing workflows behave the same, except paths now require Enter to confirm and jobs require an explicit confirmation before running.
 
 ## Requirements
 
@@ -52,8 +48,7 @@ Move and Copy use `/XJ`, so nested junctions are excluded instead of being follo
 
 ## Upgrade Notes
 
-- Review any workflow that previously selected a symlink or junction as the Move/Copy source. Use the real target path instead.
-- If you installed the `RoboSy` command shim before this release and your project path contains non-ASCII characters, rerun `Install-RoboSyPath.ps1`.
+- No migration is required. If you relied on dragged paths being accepted automatically, just press Enter to confirm each path now.
 
 ## License and Attribution
 

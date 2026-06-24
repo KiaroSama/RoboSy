@@ -6,11 +6,15 @@
 
 - Path prompts no longer auto-accept dragged or pasted paths. Every source, destination, and target path must now be confirmed with Enter so you stay in control of each step.
 - Move, Copy, Fast Delete, and Move + Symlink jobs now show a final summary and ask for an explicit confirmation before they run.
-- Completed selections (mode, source, destination/target) now stay visible in a "Selections so far" block at the top of every step instead of being cleared on each screen redraw.
+- Completed selections (mode, source, destination/target) now stay visible in a "Selections so far" block instead of being cleared on each screen redraw.
+- The terminal is no longer cleared on every step; each step is appended below the previous output. The title banner and separator line are shown only once at startup.
+- Prompt description lines are now shown as parenthesized hints in a yellow color.
+- Recolored the navigation prompt: orange `back=0`, blue `quit`, lime-green `Run as admin`, bright-green default option markers such as `[1]`, and uncolored braces.
 
 ### Added
 
 - Added `PSScriptAnalyzerSettings.psd1` and a `Lint` GitHub Actions workflow that parses and analyzes all PowerShell files on push and pull request.
+- Added GitHub community files: `CONTRIBUTING.md`, `SECURITY.md`, issue and pull request templates, a Dependabot configuration, and `.editorconfig`.
 - Expanded `.gitignore` to protect local-only and assistant paths (`.ignoreme`, `.kiro/`, `.codex/`, `secrets.md`, `explain-AI.md`).
 
 ### Removed
