@@ -1,0 +1,9 @@
+version: 2
+updates:
+  # RoboSy has no package manifest; only GitHub Actions versions are tracked.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"

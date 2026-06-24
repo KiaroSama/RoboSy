@@ -1,0 +1,26 @@
+name: Feature request
+description: Suggest an idea or improvement for RoboSy
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or motivation
+      description: What problem would this feature solve, or what would it improve?
+      placeholder: A clear description of the need.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe how you would like RoboSy to behave.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any other approaches or workarounds you thought about.
+    validations:
+      required: false

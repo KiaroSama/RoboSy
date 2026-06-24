@@ -1,0 +1,67 @@
+name: Bug report
+description: Report a problem with RoboSy
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please do not include real secrets, tokens,
+        or private paths in this report.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the bug and what you expected instead.
+      placeholder: A clear description of the problem and the expected behavior.
+    validations:
+      required: true
+  - type: dropdown
+    id: operation
+    attributes:
+      label: Which operation?
+      options:
+        - Move
+        - Copy
+        - Fast Delete
+        - Move + Symlink
+        - Launcher / startup
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: List the exact steps, inputs, and paths (sanitized) you used.
+      placeholder: |
+        1. Run RoboSy
+        2. Choose option ...
+        3. Enter path ...
+        4. See error ...
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: e.g. Windows 11 23H2
+    validations:
+      required: true
+  - type: input
+    id: powershell
+    attributes:
+      label: PowerShell version
+      description: Output of `$PSVersionTable.PSVersion`.
+      placeholder: e.g. 7.4.2
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: |
+        Paste relevant lines from the daily log (`.\logs\robosy-YYYY-MM-DD.log`).
+        Remove any sensitive paths first.
+      render: text
+    validations:
+      required: false

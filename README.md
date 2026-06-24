@@ -204,6 +204,12 @@ Runtime logs are ignored by Git and should not be published.
 | `.gitattributes` | Repository text and line-ending settings. |
 | `PSScriptAnalyzerSettings.psd1` | PSScriptAnalyzer rule configuration used locally and in CI. |
 | `.github/workflows/lint.yml` | GitHub Actions workflow that parses and analyzes the PowerShell files. |
+| `.editorconfig` | Shared editor settings (encoding, line endings, indentation). |
+| `.github/CONTRIBUTING.md` | Contribution and local development guide. |
+| `.github/SECURITY.md` | Security policy and private vulnerability reporting. |
+| `.github/ISSUE_TEMPLATE/` | Bug report and feature request templates. |
+| `.github/PULL_REQUEST_TEMPLATE.md` | Pull request checklist. |
+| `.github/dependabot.yml` | Weekly GitHub Actions version updates. |
 
 ## Ignored Local Data
 
