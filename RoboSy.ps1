@@ -350,11 +350,14 @@ function Write-Hint {
 }
 
 function Write-CommandPreview {
-    param([AllowNull()][string]$CommandText)
+    param(
+        [AllowNull()][string]$CommandText,
+        [string]$Label = "Command"
+    )
 
     if ($null -eq $CommandText) { $CommandText = "" }
 
-    Write-Line "Command:" $script:UiColor.Accent
+    Write-Line ($Label + ":") $script:UiColor.Accent
     if (Test-AnsiOutputAvailable) {
         $reset = "{0}[0m" -f [char]27
         Write-Host ("{0}{1}{2}" -f $script:CommandAnsiColor, $CommandText, $reset)
@@ -363,6 +366,28 @@ function Write-CommandPreview {
         Write-Line $CommandText Cyan
     }
     Write-Blank
+}
+
+function Write-CommandPlan {
+    param([AllowNull()][string[]]$Commands)
+
+    $list = @()
+    if ($null -ne $Commands) {
+        $list = @($Commands | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    }
+
+    if ($list.Count -eq 0) { return }
+
+    # A single command keeps the plain "Command:" label; multiple commands are
+    # numbered so the user sees every command that will run, in order.
+    if ($list.Count -eq 1) {
+        Write-CommandPreview $list[0]
+        return
+    }
+
+    for ($i = 0; $i -lt $list.Count; $i++) {
+        Write-CommandPreview $list[$i] -Label ("Command {0}" -f ($i + 1))
+    }
 }
 
 function Write-ColoredPromptSegment {
@@ -1861,7 +1886,7 @@ function Invoke-RobocopyPurgeDirectoryDelete {
 
         if (Test-Path -LiteralPath $TargetPath) {
             $quotedPath = Format-CmdPathArgument $TargetPath
-            $cleanupCode = Invoke-CmdDeleteCommand -CommandText "rmdir /s /q $quotedPath"
+            $cleanupCode = Invoke-CmdDeleteCommand -CommandText "rmdir /s /q $quotedPath" -PreviewShown:$PreviewShown
             if ($cleanupCode -ne 0) {
                 return $cleanupCode
             }
@@ -1926,7 +1951,9 @@ function Invoke-FastDeleteJob {
     }
     elseif ($deleteStatus.Type -eq "Directory") {
         $purgePreviewArgs = @("<temporary empty folder>", $deleteStatus.Path, "/MIR", "/MT:32", "/R:0", "/W:0", "/XJ", "/NFL", "/NDL", "/NJH", "/NJS", "/NP")
-        Write-CommandPreview (Get-RobocopyCommandText -Arguments $purgePreviewArgs)
+        $purgeCmd = Get-RobocopyCommandText -Arguments $purgePreviewArgs
+        $rmdirCmd = "cmd.exe /d /c rmdir /s /q " + (Format-CmdPathArgument $deleteStatus.Path)
+        Write-CommandPlan @($purgeCmd, $rmdirCmd)
     }
     else {
         Write-CommandPreview ("cmd.exe /d /c del /f /q /a " + (Format-CmdPathArgument $deleteStatus.Path))
@@ -2451,7 +2478,10 @@ function Invoke-MoveAndLinkJob {
         Write-Hint "The original path exists and the real target is missing."
         Write-Hint "The script will move the real item to the target path, then create a symbolic link at the original path."
         Write-Blank
-        Write-CommandPreview (Get-RobocopyCommandText -Arguments (Get-RobocopyMoveArgs -SourceInfo $SourceInfo -TargetPath $targetPath))
+        $moveCmd = Get-RobocopyCommandText -Arguments (Get-RobocopyMoveArgs -SourceInfo $SourceInfo -TargetPath $targetPath)
+        $linkCmd = 'New-Item -ItemType SymbolicLink -Path {0} -Target {1}' -f (Format-PowerShellArgument $sourcePath), (Format-PowerShellArgument $targetPath)
+        Write-CommandPlan @($moveCmd, $linkCmd)
+        $linkPreviewShown = $true
 
         $confirm = Read-YesNo "Continue with move + link" $false
         if ($confirm -is [string] -and $confirm -eq "EXIT") { return "EXIT" }
