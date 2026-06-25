@@ -199,6 +199,8 @@ $script:PromptNavQuitAnsiColor = ("{0}[38;5;32m" -f [char]27)
 # Yellow hint color (ANSI 256-color 221) used for the parenthesized description
 # lines shown under each prompt/command.
 $script:HintAnsiColor = ("{0}[38;5;221m" -f [char]27)
+# Muted sky-blue (ANSI 256-color 67) used for command previews.
+$script:CommandAnsiColor = ("{0}[38;5;67m" -f [char]27)
 
 function Initialize-LogPath {
     if ($script:LogInitialized) { return }
@@ -283,8 +285,16 @@ function Write-Blank {
 }
 
 function Write-Rule {
-    param([ConsoleColor]$Color = [ConsoleColor]::Cyan)
-    Write-Line "====================================================" $Color
+    param([ConsoleColor]$Color = [ConsoleColor]::Magenta)
+
+    $line = "=" * $script:HeaderWidth
+    if (Test-AnsiOutputAvailable) {
+        $reset = "{0}[0m" -f [char]27
+        Write-Host ("{0}{1}{2}" -f $script:HeaderAnsiColor, $line, $reset)
+        return
+    }
+
+    Write-Line $line $Color
 }
 
 function Test-AnsiOutputAvailable {
@@ -347,6 +357,22 @@ function Write-Hint {
     Write-Line $line Yellow
 }
 
+function Write-CommandPreview {
+    param([AllowNull()][string]$CommandText)
+
+    if ($null -eq $CommandText) { $CommandText = "" }
+
+    Write-Line "Command:" $script:UiColor.Accent
+    if (Test-AnsiOutputAvailable) {
+        $reset = "{0}[0m" -f [char]27
+        Write-Host ("{0}{1}{2}" -f $script:CommandAnsiColor, $CommandText, $reset)
+    }
+    else {
+        Write-Line $CommandText DarkCyan
+    }
+    Write-Blank
+}
+
 function Write-ColoredPromptSegment {
     param(
         [AllowNull()][string]$Text = "",
@@ -366,24 +392,51 @@ function Write-ColoredPromptSegment {
     Write-Host $Text -NoNewline -ForegroundColor $FallbackColor
 }
 
+function Write-YesNoLetter {
+    param([string]$Letter)
+
+    # The uppercase letter is the default choice; show it green like option markers.
+    if ($Letter -cmatch '[A-Z]') {
+        Write-ColoredPromptSegment $Letter $script:PromptOptionAnsiColor Green
+    }
+    else {
+        Write-ColoredPromptSegment $Letter "" $script:UiColor.Text
+    }
+}
+
 function Write-PromptText {
     param([AllowNull()][string]$Text = "")
 
     if ($null -eq $Text) { $Text = "" }
 
     $optionMatch = [regex]::Match($Text, "\[\d+\]")
-    if (-not $optionMatch.Success) {
-        Write-ColoredPromptSegment $Text "" $script:UiColor.Text
+    if ($optionMatch.Success) {
+        $before = $Text.Substring(0, $optionMatch.Index)
+        $option = $optionMatch.Value
+        $after = $Text.Substring($optionMatch.Index + $optionMatch.Length)
+
+        Write-ColoredPromptSegment $before "" $script:UiColor.Text
+        Write-ColoredPromptSegment $option $script:PromptOptionAnsiColor Green
+        Write-ColoredPromptSegment $after "" $script:UiColor.Text
         return
     }
 
-    $before = $Text.Substring(0, $optionMatch.Index)
-    $option = $optionMatch.Value
-    $after = $Text.Substring($optionMatch.Index + $optionMatch.Length)
+    $ynMatch = [regex]::Match($Text, "\[([yYnN])/([yYnN])\]")
+    if ($ynMatch.Success) {
+        $before = $Text.Substring(0, $ynMatch.Index)
+        $after = $Text.Substring($ynMatch.Index + $ynMatch.Length)
 
-    Write-ColoredPromptSegment $before "" $script:UiColor.Text
-    Write-ColoredPromptSegment $option $script:PromptOptionAnsiColor Green
-    Write-ColoredPromptSegment $after "" $script:UiColor.Text
+        Write-ColoredPromptSegment $before "" $script:UiColor.Text
+        Write-ColoredPromptSegment "[" "" $script:UiColor.Text
+        Write-YesNoLetter $ynMatch.Groups[1].Value
+        Write-ColoredPromptSegment "/" "" $script:UiColor.Text
+        Write-YesNoLetter $ynMatch.Groups[2].Value
+        Write-ColoredPromptSegment "]" "" $script:UiColor.Text
+        Write-ColoredPromptSegment $after "" $script:UiColor.Text
+        return
+    }
+
+    Write-ColoredPromptSegment $Text "" $script:UiColor.Text
 }
 
 function Write-ConsolePrompt {
@@ -1223,14 +1276,23 @@ function Get-CommonRobocopyArgs {
     )
 }
 
-function Invoke-RobocopyCommand {
+function Get-RobocopyCommandText {
     param([string[]]$Arguments)
 
-    $commandPreview = "robocopy " + (($Arguments | ForEach-Object { Format-PowerShellArgument $_ }) -join " ")
+    return "robocopy " + (($Arguments | ForEach-Object { Format-PowerShellArgument $_ }) -join " ")
+}
 
-    Write-Line "Command:" $script:UiColor.Accent
-    Write-Line $commandPreview $script:UiColor.Command
-    Write-Blank
+function Invoke-RobocopyCommand {
+    param(
+        [string[]]$Arguments,
+        [switch]$PreviewShown
+    )
+
+    $commandPreview = Get-RobocopyCommandText -Arguments $Arguments
+
+    if (-not $PreviewShown) {
+        Write-CommandPreview $commandPreview
+    }
 
     Write-Log "INFO" ("Robocopy command: {0}" -f $commandPreview)
 
@@ -1523,11 +1585,12 @@ function Invoke-RobocopyJob {
     Write-Log "INFO" ("Job start: mode={0}, sourceType={1}, source={2}, destination={3}" -f $Mode, $SourceInfo.Type, $SourceInfo.Path, $DestinationInfo.Path)
 
     if ($Mode -eq "MOVE") {
-        Write-Blank
-        Write-Line "Move mode deletes source items after robocopy confirms they were copied." $script:UiColor.Warning
+        Write-Hint "Move mode deletes source items after robocopy confirms they were copied."
     }
 
     Write-Blank
+    Write-CommandPreview (Get-RobocopyCommandText -Arguments $robocopyArgs)
+
     $confirm = Read-YesNo ("Run this {0} job now" -f (Get-ModeDisplayName $Mode)) $false
     if ($confirm -is [string] -and $confirm -eq "EXIT") { return "EXIT" }
     if ($confirm -is [string] -and $confirm -eq "BACK") { return "BACK" }
@@ -1537,7 +1600,7 @@ function Invoke-RobocopyJob {
     }
 
     Write-Blank
-    $code = Invoke-RobocopyCommand -Arguments $robocopyArgs
+    $code = Invoke-RobocopyCommand -Arguments $robocopyArgs -PreviewShown
     $sourceCleanupOk = $true
 
     if ($code -le 7 -and $Mode -eq "MOVE" -and $SourceInfo.Type -eq "Directory") {
@@ -1725,13 +1788,16 @@ function Test-UnsafeFastDeletePath {
 }
 
 function Invoke-CmdDeleteCommand {
-    param([string]$CommandText)
+    param(
+        [string]$CommandText,
+        [switch]$PreviewShown
+    )
 
     $commandPreview = "cmd.exe /d /c " + $CommandText
 
-    Write-Line "Command:" $script:UiColor.Accent
-    Write-Line $commandPreview $script:UiColor.Command
-    Write-Blank
+    if (-not $PreviewShown) {
+        Write-CommandPreview $commandPreview
+    }
 
     Write-Log "INFO" ("Fast delete command: {0}" -f $commandPreview)
 
@@ -1757,7 +1823,10 @@ function Invoke-CmdDeleteCommand {
 }
 
 function Invoke-RobocopyPurgeDirectoryDelete {
-    param([string]$TargetPath)
+    param(
+        [string]$TargetPath,
+        [switch]$PreviewShown
+    )
 
     if (-not (Assert-RobocopyAvailable)) {
         return 16
@@ -1775,8 +1844,7 @@ function Invoke-RobocopyPurgeDirectoryDelete {
     }
 
     try {
-        Write-Line "Using robocopy purge for fast folder deletion." $script:UiColor.Warning
-        Write-Line "Robocopy purges everything inside the selected folder, then RoboSy deletes the selected folder itself." $script:UiColor.Muted
+        Write-Hint "Robocopy purges everything inside the selected folder, then RoboSy deletes the selected folder itself."
         Write-Blank
 
         $robocopyArgs = @(
@@ -1794,7 +1862,7 @@ function Invoke-RobocopyPurgeDirectoryDelete {
             "/NP"
         )
 
-        $code = Invoke-RobocopyCommand -Arguments $robocopyArgs
+        $code = Invoke-RobocopyCommand -Arguments $robocopyArgs -PreviewShown:$PreviewShown
         if ($code -gt 7) {
             return $code
         }
@@ -1850,15 +1918,27 @@ function Invoke-FastDeleteJob {
     Write-Blank
     Write-Line "This is permanent. The selected path will not go to the Recycle Bin." $script:UiColor.Warning
     if (Test-IsReplaceableLinkStatus $deleteStatus) {
-        Write-Line "The selected path is a link or junction. RoboSy will delete only the link entry, not its target." $script:UiColor.Muted
+        Write-Hint "The selected path is a link or junction. RoboSy will delete only the link entry, not its target."
     }
     elseif ($deleteStatus.Type -eq "Directory") {
-        Write-Line "The selected folder and everything inside it will be permanently deleted." $script:UiColor.Muted
+        Write-Hint "The selected folder and everything inside it will be permanently deleted."
     }
     else {
-        Write-Line "The selected file will be deleted directly." $script:UiColor.Muted
+        Write-Hint "The selected file will be deleted directly."
     }
     Write-Blank
+
+    # Show the command that will run before asking for the final confirmation.
+    if (Test-IsReplaceableLinkStatus $deleteStatus) {
+        # Link removal uses a direct delete, so there is no shell command to preview.
+    }
+    elseif ($deleteStatus.Type -eq "Directory") {
+        $purgePreviewArgs = @("<temporary empty folder>", $deleteStatus.Path, "/MIR", "/MT:32", "/R:0", "/W:0", "/XJ", "/NFL", "/NDL", "/NJH", "/NJS", "/NP")
+        Write-CommandPreview (Get-RobocopyCommandText -Arguments $purgePreviewArgs)
+    }
+    else {
+        Write-CommandPreview ("cmd.exe /d /c del /f /q /a " + (Format-CmdPathArgument $deleteStatus.Path))
+    }
 
     $confirm = Read-YesNo "Permanently delete this path now" $true
     if ($confirm -is [string] -and $confirm -eq "EXIT") { return "EXIT" }
@@ -1875,7 +1955,7 @@ function Invoke-FastDeleteJob {
         $code = if ($deleted) { 0 } else { 1 }
     }
     elseif ($deleteStatus.Type -eq "Directory") {
-        $code = Invoke-RobocopyPurgeDirectoryDelete -TargetPath $deleteStatus.Path
+        $code = Invoke-RobocopyPurgeDirectoryDelete -TargetPath $deleteStatus.Path -PreviewShown
     }
     else {
         if (-not (Assert-CmdAvailable)) {
@@ -1885,7 +1965,7 @@ function Invoke-FastDeleteJob {
 
         $quotedPath = Format-CmdPathArgument $deleteStatus.Path
         $commandText = "del /f /q /a $quotedPath"
-        $code = Invoke-CmdDeleteCommand -CommandText $commandText
+        $code = Invoke-CmdDeleteCommand -CommandText $commandText -PreviewShown
     }
 
     $after = Get-PathStatus $deleteStatus.Path
@@ -1946,6 +2026,22 @@ function Resolve-LinkTargetPath {
     return $resolvedPath
 }
 
+function Get-RobocopyMoveArgs {
+    param(
+        [hashtable]$SourceInfo,
+        [string]$TargetPath
+    )
+
+    $commonArgs = Get-CommonRobocopyArgs
+
+    if ($SourceInfo.Type -eq "Directory") {
+        return @($SourceInfo.Path, $TargetPath, "/E") + $commonArgs + @("/MOVE")
+    }
+
+    $targetParent = Split-Path -Parent $TargetPath
+    return @($SourceInfo.Parent, $targetParent, $SourceInfo.Name) + $commonArgs + @("/MOV")
+}
+
 function Invoke-RobocopyMoveToExactPath {
     param(
         [hashtable]$SourceInfo,
@@ -1955,8 +2051,6 @@ function Invoke-RobocopyMoveToExactPath {
     if (-not (Assert-RobocopyAvailable)) {
         return 16
     }
-
-    $commonArgs = Get-CommonRobocopyArgs
 
     if ($SourceInfo.Type -eq "Directory") {
         $targetParent = Split-Path -Parent $TargetPath
@@ -1970,8 +2064,8 @@ function Invoke-RobocopyMoveToExactPath {
             }
         }
 
-        $robocopyArgs = @($SourceInfo.Path, $TargetPath, "/E") + $commonArgs + @("/MOVE")
-        $code = Invoke-RobocopyCommand -Arguments $robocopyArgs
+        $robocopyArgs = Get-RobocopyMoveArgs -SourceInfo $SourceInfo -TargetPath $TargetPath
+        $code = Invoke-RobocopyCommand -Arguments $robocopyArgs -PreviewShown
 
         if ($code -le 7 -and -not (Remove-EmptySourceDirectoryAfterMove -Path $SourceInfo.Path)) {
             if (-not (Test-RunningAsAdministrator)) {
@@ -2007,8 +2101,8 @@ function Invoke-RobocopyMoveToExactPath {
         }
     }
 
-    $robocopyArgs = @($SourceInfo.Parent, $targetParent, $SourceInfo.Name) + $commonArgs + @("/MOV")
-    $code = Invoke-RobocopyCommand -Arguments $robocopyArgs
+    $robocopyArgs = Get-RobocopyMoveArgs -SourceInfo $SourceInfo -TargetPath $TargetPath
+    $code = Invoke-RobocopyCommand -Arguments $robocopyArgs -PreviewShown
 
     if ($code -le 7 -and $targetName -ne $SourceInfo.Name) {
         $movedPath = Join-Path -Path $targetParent -ChildPath $SourceInfo.Name
@@ -2146,9 +2240,7 @@ function New-LinkSafe {
     }
 
     try {
-        Write-Line "Command:" $script:UiColor.Accent
-        Write-Line ('New-Item -ItemType SymbolicLink -Path {0} -Target {1}' -f (Format-PowerShellArgument $LinkPath), (Format-PowerShellArgument $TargetPath)) $script:UiColor.Command
-        Write-Blank
+        Write-CommandPreview ('New-Item -ItemType SymbolicLink -Path {0} -Target {1}' -f (Format-PowerShellArgument $LinkPath), (Format-PowerShellArgument $TargetPath))
         Write-Log "INFO" ("Creating symbolic link: {0} -> {1}" -f $LinkPath, $TargetPath)
 
         New-RoboSySymbolicLink -Path $LinkPath -Target $TargetPath | Out-Null
@@ -2163,9 +2255,7 @@ function New-LinkSafe {
             Write-Line "Symbolic link failed. Trying directory junction fallback..." $script:UiColor.Warning
 
             try {
-                Write-Line "Command:" $script:UiColor.Accent
-                Write-Line ('New-Item -ItemType Junction -Path {0} -Target {1}' -f (Format-PowerShellArgument $LinkPath), (Format-PowerShellArgument $TargetPath)) $script:UiColor.Command
-                Write-Blank
+                Write-CommandPreview ('New-Item -ItemType Junction -Path {0} -Target {1}' -f (Format-PowerShellArgument $LinkPath), (Format-PowerShellArgument $TargetPath))
                 Write-Log "INFO" ("Creating directory junction: {0} -> {1}" -f $LinkPath, $TargetPath)
 
                 New-RoboSyJunction -Path $LinkPath -Target $TargetPath | Out-Null
@@ -2320,8 +2410,8 @@ function Invoke-MoveAndLinkJob {
     }
 
     if ($allowExistingFinalTargetMove) {
-        Write-Line "The target folder already matches the source folder name; RoboSy will use it directly." $script:UiColor.Warning
-        Write-Line "Files will be moved into that existing target folder before the link is created." $script:UiColor.Muted
+        Write-Hint "The target folder already matches the source folder name; RoboSy will use it directly."
+        Write-Hint "Files will be moved into that existing target folder before the link is created."
         Write-Log "INFO" ("Allowing move into existing same-name final target: original=({0}); target=({1})" -f (Format-PathStatusForLog $sourceStatus), (Format-PathStatusForLog $targetStatus))
         Write-Blank
     }
@@ -2358,13 +2448,14 @@ function Invoke-MoveAndLinkJob {
         }
 
         if ($capability.LinkKind -eq "Junction") {
-            Write-Line "Directory symbolic links are not available in this session; the script will use a junction fallback after moving." $script:UiColor.Warning
+            Write-Hint "Directory symbolic links are not available in this session; the script will use a junction fallback after moving."
             Write-Blank
         }
 
-        Write-Line "The original path exists and the real target is missing." $script:UiColor.Warning
-        Write-Line "The script will move the real item to the target path, then create a symbolic link at the original path." $script:UiColor.Muted
+        Write-Hint "The original path exists and the real target is missing."
+        Write-Hint "The script will move the real item to the target path, then create a symbolic link at the original path."
         Write-Blank
+        Write-CommandPreview (Get-RobocopyCommandText -Arguments (Get-RobocopyMoveArgs -SourceInfo $SourceInfo -TargetPath $targetPath))
 
         $confirm = Read-YesNo "Continue with move + link" $false
         if ($confirm -is [string] -and $confirm -eq "EXIT") { return "EXIT" }
@@ -2391,8 +2482,8 @@ function Invoke-MoveAndLinkJob {
         }
     }
     else {
-        Write-Line "The original path is missing and the real target exists." $script:UiColor.Success
-        Write-Line "The script will create only the symbolic link." $script:UiColor.Muted
+        Write-Hint "The original path is missing and the real target exists."
+        Write-Hint "The script will create only the symbolic link."
         Write-Blank
 
         $confirm = Read-YesNo "Create the symbolic link now" $false
