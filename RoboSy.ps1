@@ -199,8 +199,8 @@ $script:PromptNavQuitAnsiColor = ("{0}[38;5;32m" -f [char]27)
 # Yellow hint color (ANSI 256-color 221) used for the parenthesized description
 # lines shown under each prompt/command.
 $script:HintAnsiColor = ("{0}[38;5;221m" -f [char]27)
-# Muted sky-blue (ANSI 256-color 67) used for command previews.
-$script:CommandAnsiColor = ("{0}[38;5;67m" -f [char]27)
+# Light sky-blue used for command previews.
+$script:CommandAnsiColor = ("{0}[38;2;135;206;235m" -f [char]27)
 
 function Initialize-LogPath {
     if ($script:LogInitialized) { return }
@@ -285,16 +285,8 @@ function Write-Blank {
 }
 
 function Write-Rule {
-    param([ConsoleColor]$Color = [ConsoleColor]::Magenta)
-
-    $line = "=" * $script:HeaderWidth
-    if (Test-AnsiOutputAvailable) {
-        $reset = "{0}[0m" -f [char]27
-        Write-Host ("{0}{1}{2}" -f $script:HeaderAnsiColor, $line, $reset)
-        return
-    }
-
-    Write-Line $line $Color
+    param([ConsoleColor]$Color = [ConsoleColor]::Cyan)
+    Write-Line ("=" * $script:HeaderWidth) $Color
 }
 
 function Test-AnsiOutputAvailable {
@@ -368,7 +360,7 @@ function Write-CommandPreview {
         Write-Host ("{0}{1}{2}" -f $script:CommandAnsiColor, $CommandText, $reset)
     }
     else {
-        Write-Line $CommandText DarkCyan
+        Write-Line $CommandText Cyan
     }
     Write-Blank
 }
