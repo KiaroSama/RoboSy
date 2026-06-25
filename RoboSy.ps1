@@ -2193,7 +2193,8 @@ function Test-LinkCreationCapability {
 function New-LinkSafe {
     param(
         [string]$LinkPath,
-        [string]$TargetPath
+        [string]$TargetPath,
+        [switch]$PreviewShown
     )
 
     $linkStatus = Get-PathStatus $LinkPath
@@ -2232,7 +2233,9 @@ function New-LinkSafe {
     }
 
     try {
-        Write-CommandPreview ('New-Item -ItemType SymbolicLink -Path {0} -Target {1}' -f (Format-PowerShellArgument $LinkPath), (Format-PowerShellArgument $TargetPath))
+        if (-not $PreviewShown) {
+            Write-CommandPreview ('New-Item -ItemType SymbolicLink -Path {0} -Target {1}' -f (Format-PowerShellArgument $LinkPath), (Format-PowerShellArgument $TargetPath))
+        }
         Write-Log "INFO" ("Creating symbolic link: {0} -> {1}" -f $LinkPath, $TargetPath)
 
         New-RoboSySymbolicLink -Path $LinkPath -Target $TargetPath | Out-Null
@@ -2339,6 +2342,7 @@ function Invoke-MoveAndLinkJob {
     )
 
     $startedAt = Get-Date
+    $linkPreviewShown = $false
 
     $sourcePath = $SourceInfo.Path
     $targetPath = Resolve-LinkTargetPath -SourceInfo $SourceInfo -TargetInputInfo $TargetInputInfo
@@ -2477,6 +2481,8 @@ function Invoke-MoveAndLinkJob {
         Write-Hint "The original path is missing and the real target exists."
         Write-Hint "The script will create only the symbolic link."
         Write-Blank
+        Write-CommandPreview ('New-Item -ItemType SymbolicLink -Path {0} -Target {1}' -f (Format-PowerShellArgument $sourcePath), (Format-PowerShellArgument $targetPath))
+        $linkPreviewShown = $true
 
         $confirm = Read-YesNo "Create the symbolic link now" $false
         if ($confirm -is [string] -and $confirm -eq "EXIT") { return "EXIT" }
@@ -2488,7 +2494,7 @@ function Invoke-MoveAndLinkJob {
         Write-Blank
     }
 
-    $linked = New-LinkSafe -LinkPath $sourcePath -TargetPath $targetPath
+    $linked = New-LinkSafe -LinkPath $sourcePath -TargetPath $targetPath -PreviewShown:$linkPreviewShown
 
     if ($linked) {
         Write-Log "INFO" ("Symbolic link created: {0} -> {1}" -f $sourcePath, $targetPath)
