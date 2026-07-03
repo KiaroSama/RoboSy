@@ -1104,15 +1104,8 @@ function Read-ConsoleText {
 }
 
 function Read-ReturnToMenu {
-    $after = Read-ConsoleText "Press Enter to return to menu"
-    if (Test-ExitInput $after) {
-        return "EXIT"
-    }
-
-    if (Test-BackInput $after) {
-        return "BACK"
-    }
-
+    # Return to the main menu automatically without prompting. The screen is
+    # never cleared, so the finished job output stays visible above the menu.
     return "MENU"
 }
 
