@@ -229,7 +229,7 @@ function Initialize-LogPath {
     foreach ($logDir in $candidateDirs) {
         try {
             if (-not (Test-Path -LiteralPath $logDir)) {
-                New-RoboSyDirectory -Path $logDir -Force | Out-Null
+                New-RoboSyDirectory -Path $logDir | Out-Null
             }
 
             $probe = Join-Path -Path $logDir -ChildPath (".robosy-write-test-{0}.tmp" -f $PID)
@@ -565,16 +565,6 @@ function Write-LabelValue {
     if ($null -eq $Value) { $Value = "" }
     Write-Host ("  {0,-18}" -f ($Label + ":")) -NoNewline -ForegroundColor $script:UiColor.Muted
     Write-Host $Value -ForegroundColor $ValueColor
-}
-
-function Write-PathBlock {
-    param(
-        [string]$Label,
-        [AllowNull()][string]$Path
-    )
-
-    Write-Line ("{0}:" -f $Label) $script:UiColor.Accent
-    Write-Line ("  {0}" -f $Path) $script:UiColor.Path
 }
 
 function Get-ModeDisplayName {
@@ -1081,59 +1071,20 @@ function Read-ConsoleText {
         return $redirectedInput
     }
 
-    Write-ConsolePrompt -Prompt $Prompt -HideNavigation:$HideNavigation
-
-    $buffer = New-Object System.Text.StringBuilder
-
+    # $Host.UI.ReadLine() uses the console's own native line editor (backspace,
+    # Escape-to-clear, arrow-key movement, Ctrl+C) instead of hand-rolling
+    # character-by-character key handling; it never prints its own prompt, so
+    # it composes cleanly with the colored prompt already written above.
     while ($true) {
-        if ([Console]::KeyAvailable) {
-            $key = [Console]::ReadKey($true)
+        Write-ConsolePrompt -Prompt $Prompt -HideNavigation:$HideNavigation
+        $inputText = $Host.UI.ReadLine()
 
-            if (($key.Modifiers -band [ConsoleModifiers]::Control) -and $key.Key -eq [ConsoleKey]::C) {
-                throw "Input cancelled with Ctrl+C."
-            }
-
-            switch ($key.Key) {
-                ([ConsoleKey]::Enter) {
-                    $inputText = $buffer.ToString()
-                    Write-Host ""
-
-                    if (Test-AdminInput $inputText) {
-                        $null = Invoke-AdminSwitch
-                        $null = $buffer.Clear()
-                        Write-ConsolePrompt -Prompt $Prompt -HideNavigation:$HideNavigation
-                        continue
-                    }
-
-                    return $inputText
-                }
-                ([ConsoleKey]::Backspace) {
-                    if ($buffer.Length -gt 0) {
-                        $null = $buffer.Remove($buffer.Length - 1, 1)
-                        Write-Host "`b `b" -NoNewline
-                    }
-                    continue
-                }
-                ([ConsoleKey]::Escape) {
-                    while ($buffer.Length -gt 0) {
-                        $null = $buffer.Remove($buffer.Length - 1, 1)
-                        Write-Host "`b `b" -NoNewline
-                    }
-                    continue
-                }
-                default {
-                    if ($key.KeyChar -ne [char]0 -and -not [char]::IsControl($key.KeyChar)) {
-                        $null = $buffer.Append($key.KeyChar)
-                        Write-Host $key.KeyChar -NoNewline
-                    }
-                }
-            }
+        if (Test-AdminInput $inputText) {
+            $null = Invoke-AdminSwitch
+            continue
         }
-        else {
-            # No auto-accept: always wait for the user to press Enter, even after
-            # a drag/drop paste. This keeps the user in control of every step.
-            Start-Sleep -Milliseconds 45
-        }
+
+        return $inputText
     }
 }
 
@@ -1987,25 +1938,8 @@ function Format-CmdPathArgument {
     return ('"{0}"' -f ($Path -replace '"', '""'))
 }
 
-function ConvertTo-NewItemParentPath {
-    param([string]$Path)
-
-    return [System.Management.Automation.WildcardPattern]::Escape($Path)
-}
-
 function New-RoboSyDirectory {
-    param(
-        [string]$Path,
-        [switch]$Force
-    )
-
-    if ($Force) {
-        return [System.IO.Directory]::CreateDirectory($Path)
-    }
-
-    if (Test-Path -LiteralPath $Path) {
-        throw "An item already exists at the requested directory path: $Path"
-    }
+    param([string]$Path)
 
     return [System.IO.Directory]::CreateDirectory($Path)
 }
@@ -2022,7 +1956,7 @@ function New-RoboSySymbolicLink {
         $parent = "."
     }
 
-    return (New-Item -ItemType SymbolicLink -Path (ConvertTo-NewItemParentPath $parent) -Name $name -Target $Target -ErrorAction Stop)
+    return (New-Item -ItemType SymbolicLink -Path ([System.Management.Automation.WildcardPattern]::Escape($parent)) -Name $name -Target $Target -ErrorAction Stop)
 }
 
 function New-RoboSyJunction {
@@ -2037,7 +1971,7 @@ function New-RoboSyJunction {
         $parent = "."
     }
 
-    return (New-Item -ItemType Junction -Path (ConvertTo-NewItemParentPath $parent) -Name $name -Target $Target -ErrorAction Stop)
+    return (New-Item -ItemType Junction -Path ([System.Management.Automation.WildcardPattern]::Escape($parent)) -Name $name -Target $Target -ErrorAction Stop)
 }
 
 function New-RobocopyEmptySourceDirectory {
@@ -2063,7 +1997,7 @@ function New-RobocopyEmptySourceDirectory {
             }
 
             if (-not (Test-Path -LiteralPath $rootPath)) {
-                New-RoboSyDirectory -Path $rootPath -Force | Out-Null
+                New-RoboSyDirectory -Path $rootPath | Out-Null
             }
 
             $emptySource = Join-Path -Path $rootPath -ChildPath (".robosy-empty-delete-{0}" -f ([Guid]::NewGuid().ToString("N")))
@@ -2076,7 +2010,7 @@ function New-RobocopyEmptySourceDirectory {
                 continue
             }
 
-            New-RoboSyDirectory -Path $emptySourceFullPath -Force | Out-Null
+            New-RoboSyDirectory -Path $emptySourceFullPath | Out-Null
             return $emptySourceFullPath
         }
         catch {
@@ -2381,7 +2315,7 @@ function Invoke-RobocopyMoveToExactPath {
         $targetParent = Split-Path -Parent $TargetPath
         if (-not [string]::IsNullOrWhiteSpace($targetParent) -and -not (Test-Path -LiteralPath $targetParent)) {
             try {
-                New-RoboSyDirectory -Path $targetParent -Force | Out-Null
+                New-RoboSyDirectory -Path $targetParent | Out-Null
             }
             catch {
                 Write-Log "WARN" ("Could not pre-create target parent {0}: {1}" -f $targetParent, $_.Exception.Message)
@@ -2419,7 +2353,7 @@ function Invoke-RobocopyMoveToExactPath {
 
     if (-not (Test-Path -LiteralPath $targetParent)) {
         try {
-            New-RoboSyDirectory -Path $targetParent -Force | Out-Null
+            New-RoboSyDirectory -Path $targetParent | Out-Null
         }
         catch {
             Write-Log "WARN" ("Could not pre-create target parent {0}: {1}" -f $targetParent, $_.Exception.Message)
@@ -2481,7 +2415,7 @@ function Test-LinkCreationCapability {
 
     try {
         if ($ItemType -eq "Directory") {
-            New-RoboSyDirectory -Path $targetPath -Force | Out-Null
+            New-RoboSyDirectory -Path $targetPath | Out-Null
 
             try {
                 New-RoboSySymbolicLink -Path $linkPath -Target $targetPath | Out-Null
@@ -2561,7 +2495,7 @@ function New-LinkSafe {
 
     $linkParent = Split-Path -Parent $LinkPath
     if (-not [string]::IsNullOrWhiteSpace($linkParent) -and -not (Test-Path -LiteralPath $linkParent)) {
-        New-RoboSyDirectory -Path $linkParent -Force | Out-Null
+        New-RoboSyDirectory -Path $linkParent | Out-Null
         Write-Log "INFO" ("Created link parent directory: {0}" -f $linkParent)
     }
 
