@@ -114,3 +114,23 @@ remuxed/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Hook Maker: local/private files (auto-managed)
+!/.env.dist
+!/.env.example
+!/.env.sample
+!/.env.template
+/.agents/
+/.ai/
+/.claude/
+/.cline/
+/.codex/
+/.cursor/
+/.env
+/.env.*
+/.kiro/
+/AGENTS.md
+/CLAUDE.md
+/explain-AI.md
+/graphify-out/
+/reference.md

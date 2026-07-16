@@ -814,6 +814,40 @@ function Test-IsReplaceableLinkStatus {
     return ($null -ne $Status -and $Status.Exists -and ($Status.IsSymbolicLink -or $Status.IsJunction))
 }
 
+function Get-ProtectedRootReason {
+    param([AllowNull()][string]$Path)
+
+    $normalized = Normalize-PathForCompare $Path
+    if ([string]::IsNullOrWhiteSpace($normalized)) {
+        return "The path is empty or invalid."
+    }
+
+    $root = [System.IO.Path]::GetPathRoot($normalized)
+    if (-not [string]::IsNullOrWhiteSpace($root)) {
+        $normalizedRoot = Normalize-PathForCompare $root
+        if ($normalized.Equals($normalizedRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            return "Drive roots and share roots cannot be used for this operation."
+        }
+    }
+
+    # Only the protected roots themselves are blocked. Ordinary folders located
+    # under them stay usable.
+    $blockedRoots = New-Object System.Collections.Generic.List[string]
+    foreach ($candidate in @($env:SystemRoot, $env:WINDIR, $env:ProgramFiles, ${env:ProgramFiles(x86)}, $HOME)) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate)) {
+            $blockedRoots.Add((Normalize-PathForCompare $candidate))
+        }
+    }
+
+    foreach ($blockedRoot in @($blockedRoots | Select-Object -Unique)) {
+        if ($normalized.Equals($blockedRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            return ("Protected root path cannot be used for this operation: {0}" -f $blockedRoot)
+        }
+    }
+
+    return $null
+}
+
 function Remove-ExistingLinkOnly {
     param(
         [string]$Path,
@@ -1306,8 +1340,12 @@ function Invoke-RobocopyCommand {
 
     Write-Log "INFO" ("Robocopy command: {0}" -f $commandPreview)
 
-    & robocopy @Arguments
-    $code = $LASTEXITCODE
+    # Out-Host keeps robocopy's live output visible while keeping it out of the
+    # success pipeline. Without it the native output is returned to the caller
+    # together with the exit code, and "$code = Invoke-RobocopyCommand ..." gets
+    # an Object[] instead of an integer.
+    & robocopy @Arguments | Out-Host
+    $code = [int]$LASTEXITCODE
     $description = Get-RobocopyExitDescription $code
 
     Write-Blank
@@ -1327,6 +1365,7 @@ function Invoke-RobocopyCommand {
         }
     }
 
+    # Callers compare this against 7, so it must stay a single integer.
     return $code
 }
 
@@ -1426,6 +1465,19 @@ function Read-SourcePath {
             continue
         }
 
+        if ($Mode -eq "MOVE" -or $Mode -eq "COPY") {
+            $protectedReason = Get-ProtectedRootReason $sourceInfo.Path
+            if (-not [string]::IsNullOrWhiteSpace($protectedReason)) {
+                Write-Blank
+                Write-Line "Move/Copy source cannot be a drive root, share root, or protected system/profile root." $script:UiColor.Error
+                Write-Line $protectedReason $script:UiColor.Warning
+                Write-Line "Choose a specific folder or file inside it instead." $script:UiColor.Muted
+                Write-Log "ERROR" ("Move/Copy source rejected as a protected root: {0}; reason={1}" -f $sourceInfo.Path, $protectedReason)
+                Start-Sleep -Seconds 3
+                continue
+            }
+        }
+
         if (($Mode -eq "MOVE" -or $Mode -eq "COPY") -and $sourceInfo.IsReparsePoint) {
             Write-Blank
             Write-Line "Move/Copy source cannot be a symbolic link, junction, or other reparse point." $script:UiColor.Error
@@ -1467,11 +1519,15 @@ function Read-DestinationPath {
         }
         else {
             Write-Line "Enter the destination folder path." $script:UiColor.Text
-            Write-Hint "Robocopy treats this as a folder. For one file, the original file name is kept."
+            Write-Hint "This is the folder the selected item is transferred into."
             Write-Hint "If the destination folder does not exist, robocopy will create it."
 
             if ($SourceInfo.Type -eq "Directory") {
-                Write-Hint "To create a same-named folder at the destination, include that folder name in the path."
+                Write-Hint ("The selected folder is transferred as a folder, so it becomes <destination>\{0}." -f $SourceInfo.Name)
+                Write-Hint ("A destination that already ends with '{0}' is used as the final folder instead." -f $SourceInfo.Name)
+            }
+            else {
+                Write-Hint ("The original file name is kept, so the file becomes <destination>\{0}." -f $SourceInfo.Name)
             }
         }
 
@@ -1503,10 +1559,12 @@ function Read-DestinationPath {
                 continue
             }
 
-            if ($SourceInfo.Type -eq "Directory" -and (Test-IsSameOrChildPath -Parent $SourceInfo.Path -Child $destInfo.Path)) {
+            $rejectReason = Get-StandardDestinationRejectReason -SourceInfo $SourceInfo -DestinationPath $destInfo.Path
+            if (-not [string]::IsNullOrWhiteSpace($rejectReason)) {
                 Write-Blank
-                Write-Line "Destination cannot be the source folder or a folder inside the source." $script:UiColor.Error
+                Write-Line $rejectReason $script:UiColor.Error
                 Write-Line "That can cause recursive copies or destructive move behavior." $script:UiColor.Warning
+                Write-Log "ERROR" ("Destination rejected: {0}; source={1}; destinationInput={2}" -f $rejectReason, $SourceInfo.Path, $destInfo.Path)
                 Start-Sleep -Seconds 3
                 continue
             }
@@ -1534,17 +1592,88 @@ function Read-DestinationPath {
     }
 }
 
+# Standard Move/Copy transfer the selected item itself, not only its contents.
+# A directory source therefore keeps its own leaf name at the destination:
+# "E:\A\Docs" sent to "F:\B" becomes "F:\B\Docs", never "F:\B\<contents>".
+# A destination whose leaf already equals the source folder name is treated as
+# the final directory, so the same input can never produce "F:\B\Docs\Docs".
+# A file source keeps its original file name inside the destination folder, so
+# the destination folder itself is the effective destination.
+# Move + Symlink keeps its own exact-target semantics in Resolve-LinkTargetPath.
+function Resolve-EffectiveDestinationPath {
+    param(
+        [hashtable]$SourceInfo,
+        [AllowNull()][string]$DestinationPath
+    )
+
+    $destination = Normalize-PathForCompare $DestinationPath
+
+    if ($SourceInfo.Type -ne "Directory") {
+        return $destination
+    }
+
+    $destinationLeaf = Get-PathLeafForCompare $destination
+    if (-not [string]::IsNullOrWhiteSpace($destinationLeaf) -and $destinationLeaf.Equals($SourceInfo.Name, [StringComparison]::OrdinalIgnoreCase)) {
+        return $destination
+    }
+
+    return (Join-Path -Path $destination -ChildPath $SourceInfo.Name)
+}
+
+# The path of the transferred item once the job has run. For a directory source
+# this is the effective destination itself; for a file source it is the file
+# inside the effective destination folder.
+function Resolve-StandardFinalItemPath {
+    param(
+        [hashtable]$SourceInfo,
+        [AllowNull()][string]$DestinationPath
+    )
+
+    $effectiveDestination = Resolve-EffectiveDestinationPath -SourceInfo $SourceInfo -DestinationPath $DestinationPath
+    if ($SourceInfo.Type -eq "Directory") {
+        return $effectiveDestination
+    }
+
+    return (Join-Path -Path $effectiveDestination -ChildPath $SourceInfo.Name)
+}
+
+# Validates the entered destination against the resolved effective destination
+# rather than the raw input, so "E:\A\Docs" -> "E:\A" is caught as a same-path
+# job instead of being handed to robocopy.
+function Get-StandardDestinationRejectReason {
+    param(
+        [hashtable]$SourceInfo,
+        [AllowNull()][string]$DestinationPath
+    )
+
+    $effectiveDestination = Resolve-EffectiveDestinationPath -SourceInfo $SourceInfo -DestinationPath $DestinationPath
+    $finalItemPath = Resolve-StandardFinalItemPath -SourceInfo $SourceInfo -DestinationPath $DestinationPath
+
+    $sourceCompare = Normalize-PathForCompare $SourceInfo.Path
+    $finalCompare = Normalize-PathForCompare $finalItemPath
+
+    if ([string]::Equals($sourceCompare, $finalCompare, [StringComparison]::OrdinalIgnoreCase)) {
+        return ("Source and destination resolve to the same path: {0}" -f $finalItemPath)
+    }
+
+    if ($SourceInfo.Type -eq "Directory" -and (Test-IsSameOrChildPath -Parent $SourceInfo.Path -Child $effectiveDestination)) {
+        return "Destination cannot be the source folder or a folder inside the source."
+    }
+
+    return $null
+}
+
 function Get-StandardRobocopyArgs {
     param(
         [string]$Mode,
         [hashtable]$SourceInfo,
-        [string]$DestinationFolder
+        [string]$EffectiveDestination
     )
 
     $commonArgs = Get-CommonRobocopyArgs
 
     if ($SourceInfo.Type -eq "Directory") {
-        $robocopyArgs = @($SourceInfo.Path, $DestinationFolder, "/E") + $commonArgs
+        $robocopyArgs = @($SourceInfo.Path, $EffectiveDestination, "/E") + $commonArgs
 
         if ($Mode -eq "MOVE") {
             $robocopyArgs += "/MOVE"
@@ -1553,7 +1682,7 @@ function Get-StandardRobocopyArgs {
         return $robocopyArgs
     }
 
-    $robocopyArgs = @($SourceInfo.Parent, $DestinationFolder, $SourceInfo.Name) + $commonArgs
+    $robocopyArgs = @($SourceInfo.Parent, $EffectiveDestination, $SourceInfo.Name) + $commonArgs
 
     if ($Mode -eq "MOVE") {
         $robocopyArgs += "/MOV"
@@ -1571,11 +1700,17 @@ function Invoke-RobocopyJob {
 
     $startedAt = Get-Date
 
-    Set-Breadcrumb @(
-        (New-BreadcrumbStep "Mode" (Get-ModeDisplayName $Mode) $script:UiColor.Accent),
-        (New-BreadcrumbStep "Source" $SourceInfo.Path $script:UiColor.Path),
-        (New-BreadcrumbStep "Destination" $DestinationInfo.Path $script:UiColor.Path)
-    )
+    $effectiveDestination = Resolve-EffectiveDestinationPath -SourceInfo $SourceInfo -DestinationPath $DestinationInfo.Path
+    $finalItemPath = Resolve-StandardFinalItemPath -SourceInfo $SourceInfo -DestinationPath $DestinationInfo.Path
+
+    $breadcrumbSteps = New-Object System.Collections.Generic.List[object]
+    $breadcrumbSteps.Add((New-BreadcrumbStep "Mode" (Get-ModeDisplayName $Mode) $script:UiColor.Accent))
+    $breadcrumbSteps.Add((New-BreadcrumbStep "Source" $SourceInfo.Path $script:UiColor.Path))
+    $breadcrumbSteps.Add((New-BreadcrumbStep "Destination" $DestinationInfo.Path $script:UiColor.Path))
+    if (-not [string]::Equals((Normalize-PathForCompare $DestinationInfo.Path), (Normalize-PathForCompare $finalItemPath), [StringComparison]::OrdinalIgnoreCase)) {
+        $breadcrumbSteps.Add((New-BreadcrumbStep "Final path" $finalItemPath $script:UiColor.Path))
+    }
+    Set-Breadcrumb $breadcrumbSteps.ToArray()
 
     Show-Header
     Write-Line "Review the job below before it runs." $script:UiColor.Accent
@@ -1586,13 +1721,47 @@ function Invoke-RobocopyJob {
         return (Read-ReturnToMenu)
     }
 
-    $robocopyArgs = Get-StandardRobocopyArgs -Mode $Mode -SourceInfo $SourceInfo -DestinationFolder $DestinationInfo.Path
+    $rejectReason = Get-StandardDestinationRejectReason -SourceInfo $SourceInfo -DestinationPath $DestinationInfo.Path
+    if (-not [string]::IsNullOrWhiteSpace($rejectReason)) {
+        Write-Line "Job stopped before anything was transferred." $script:UiColor.Error
+        Write-Line $rejectReason $script:UiColor.Warning
+        Write-Log "ERROR" ("Standard job blocked: {0}; source={1}; destinationInput={2}" -f $rejectReason, $SourceInfo.Path, $DestinationInfo.Path)
+        Write-Blank
+        return (Read-ReturnToMenu)
+    }
+
+    $robocopyArgs = Get-StandardRobocopyArgs -Mode $Mode -SourceInfo $SourceInfo -EffectiveDestination $effectiveDestination
+
+    $finalStatus = Get-PathStatus $finalItemPath
+    $collisionMessage = $null
+
+    if (-not $finalStatus.Exists) {
+        $finalPlan = "Create (does not exist yet)"
+    }
+    elseif ($finalStatus.Type -eq "Directory") {
+        $existingCount = @(Get-ChildItem -LiteralPath $finalItemPath -Force -ErrorAction SilentlyContinue).Count
+        if ($existingCount -eq 0) {
+            $finalPlan = "Reuse (existing empty folder)"
+        }
+        else {
+            $finalPlan = ("Merge into an existing folder that already holds {0} item(s)" -f $existingCount)
+            $collisionMessage = "Existing files with the same names inside that folder will be overwritten. Unrelated files already there are kept."
+        }
+    }
+    else {
+        $finalPlan = "Overwrite (an existing file is already at this path)"
+        $collisionMessage = "The existing file at the final path will be overwritten."
+    }
 
     Write-LabelValue "Source type" $SourceInfo.Type $script:UiColor.Text
+    Write-LabelValue "Final path" $finalItemPath $script:UiColor.Path
+    Write-LabelValue "Final path plan" $finalPlan $script:UiColor.Text
 
     Write-PathStatusLog "Standard job source check" $SourceInfo
     Write-PathStatusLog "Standard job destination check" $DestinationInfo
-    Write-Log "INFO" ("Job start: mode={0}, sourceType={1}, source={2}, destination={3}" -f $Mode, $SourceInfo.Type, $SourceInfo.Path, $DestinationInfo.Path)
+    Write-PathStatusLog "Standard job final path check" $finalStatus
+    Write-Log "INFO" ("Job start: mode={0}, sourceType={1}, source={2}, destinationInput={3}, effectiveDestination={4}, finalPath={5}, finalPlan={6}" -f `
+        $Mode, $SourceInfo.Type, $SourceInfo.Path, $DestinationInfo.Path, $effectiveDestination, $finalItemPath, $finalPlan)
 
     if ($Mode -eq "MOVE") {
         Write-Hint "Move mode deletes source items after robocopy confirms they were copied."
@@ -1600,6 +1769,22 @@ function Invoke-RobocopyJob {
 
     Write-Blank
     Write-CommandPreview (Get-RobocopyCommandText -Arguments $robocopyArgs)
+
+    if (-not [string]::IsNullOrWhiteSpace($collisionMessage)) {
+        Write-Line "The final path already exists." $script:UiColor.Warning
+        Write-Line $collisionMessage $script:UiColor.Muted
+        Write-Blank
+
+        $collisionConfirm = Read-YesNo ("Continue into the existing path {0}" -f $finalItemPath) $true
+        if ($collisionConfirm -is [string] -and $collisionConfirm -eq "EXIT") { return "EXIT" }
+        if ($collisionConfirm -is [string] -and $collisionConfirm -eq "BACK") { return "BACK" }
+        if (-not $collisionConfirm) {
+            Write-Log "INFO" ("Job canceled at the final-path collision prompt: mode={0}; finalPath={1}" -f $Mode, $finalItemPath)
+            return "MENU"
+        }
+
+        Write-Blank
+    }
 
     $confirm = Read-YesNo ("Run this {0} job now" -f (Get-ModeDisplayName $Mode)) $false
     if ($confirm -is [string] -and $confirm -eq "EXIT") { return "EXIT" }
@@ -1610,6 +1795,19 @@ function Invoke-RobocopyJob {
     }
 
     Write-Blank
+
+    # Re-read the source immediately before the destructive step so a path that
+    # changed between the review and the confirmation cannot be acted on.
+    $sourceRecheck = Get-PathStatus $SourceInfo.Path
+    Write-PathStatusLog "Standard job source recheck before execution" $sourceRecheck
+    if (-not $sourceRecheck.Exists -or $sourceRecheck.Type -ne $SourceInfo.Type -or $sourceRecheck.IsReparsePoint) {
+        Write-Line "The source path changed after the review, so nothing was transferred." $script:UiColor.Error
+        Write-Line ("  {0}" -f $SourceInfo.Path) $script:UiColor.Path
+        Write-Log "ERROR" ("Standard job aborted because the source changed after review: {0}" -f (Format-PathStatusForLog $sourceRecheck))
+        Write-Blank
+        return (Read-ReturnToMenu)
+    }
+
     $code = Invoke-RobocopyCommand -Arguments $robocopyArgs -PreviewShown
     $sourceCleanupOk = $true
 
@@ -1764,30 +1962,9 @@ function Test-UnsafeFastDeletePath {
         return "The delete target does not exist."
     }
 
-    $path = Normalize-PathForCompare $Status.Path
-    if ([string]::IsNullOrWhiteSpace($path)) {
-        return "The delete target path is empty or invalid."
-    }
-
-    $root = [System.IO.Path]::GetPathRoot($path)
-    if (-not [string]::IsNullOrWhiteSpace($root)) {
-        $normalizedRoot = Normalize-PathForCompare $root
-        if ($path.Equals($normalizedRoot, [StringComparison]::OrdinalIgnoreCase)) {
-            return "Drive roots and share roots cannot be deleted from this menu."
-        }
-    }
-
-    $blockedRoots = New-Object System.Collections.Generic.List[string]
-    foreach ($candidate in @($env:SystemRoot, $env:WINDIR, $env:ProgramFiles, ${env:ProgramFiles(x86)}, $HOME)) {
-        if (-not [string]::IsNullOrWhiteSpace($candidate)) {
-            $blockedRoots.Add((Normalize-PathForCompare $candidate))
-        }
-    }
-
-    foreach ($blockedRoot in @($blockedRoots | Select-Object -Unique)) {
-        if ($path.Equals($blockedRoot, [StringComparison]::OrdinalIgnoreCase)) {
-            return ("Protected root path cannot be deleted from this menu: {0}" -f $blockedRoot)
-        }
+    $protectedReason = Get-ProtectedRootReason $Status.Path
+    if (-not [string]::IsNullOrWhiteSpace($protectedReason)) {
+        return $protectedReason
     }
 
     if ($Status.IsReparsePoint -and -not (Test-IsReplaceableLinkStatus $Status)) {
@@ -1811,8 +1988,10 @@ function Invoke-CmdDeleteCommand {
 
     Write-Log "INFO" ("Fast delete command: {0}" -f $commandPreview)
 
-    & cmd.exe /d /c $CommandText
-    $code = $LASTEXITCODE
+    # See Invoke-RobocopyCommand: Out-Host keeps the command output visible
+    # without letting it become part of this function's return value.
+    & cmd.exe /d /c $CommandText | Out-Host
+    $code = [int]$LASTEXITCODE
 
     Write-Blank
     if ($code -eq 0) {
@@ -1829,6 +2008,7 @@ function Invoke-CmdDeleteCommand {
         }
     }
 
+    # Callers compare this against 0, so it must stay a single integer.
     return $code
 }
 
@@ -2405,12 +2585,10 @@ function Invoke-MoveAndLinkJob {
             return (Read-ReturnToMenu)
         }
 
-        if (-not (Remove-ExistingLinkOnly -Path $sourcePath -Status $sourceStatus)) {
-            Write-Blank
-            return (Read-ReturnToMenu)
-        }
-
-        $sourceStatus = Get-PathStatus $sourcePath
+        # The existing link is left untouched here. Removing it during the
+        # review would destroy it even if the user then cancels. New-LinkSafe
+        # re-reads the path and removes the link only after the confirmation,
+        # immediately before the replacement link is created.
         $sourceExists = $false
     }
 
@@ -2501,13 +2679,24 @@ function Invoke-MoveAndLinkJob {
         }
     }
     else {
-        Write-Hint "The original path is missing and the real target exists."
-        Write-Hint "The script will create only the symbolic link."
+        if ($sourceIsReplaceableLink) {
+            Write-Hint ("The original path is an existing {0} and the real target exists." -f $sourceStatus.Kind)
+            Write-Hint "The existing link is replaced with a new link only after you confirm; its target is never followed."
+        }
+        else {
+            Write-Hint "The original path is missing and the real target exists."
+            Write-Hint "The script will create only the symbolic link."
+        }
         Write-Blank
         Write-CommandPreview ('New-Item -ItemType SymbolicLink -Path {0} -Target {1}' -f (Format-PowerShellArgument $sourcePath), (Format-PowerShellArgument $targetPath))
         $linkPreviewShown = $true
 
-        $confirm = Read-YesNo "Create the symbolic link now" $false
+        $confirm = if ($sourceIsReplaceableLink) {
+            Read-YesNo "Replace the existing link now" $false
+        }
+        else {
+            Read-YesNo "Create the symbolic link now" $false
+        }
         if ($confirm -is [string] -and $confirm -eq "EXIT") { return "EXIT" }
         if ($confirm -is [string] -and $confirm -eq "BACK") { return "BACK" }
         if (-not $confirm) {
@@ -2544,6 +2733,10 @@ function Invoke-MoveAndLinkJob {
 
     return (Read-ReturnToMenu)
 }
+
+# Test hook: dot-sourcing this script with ROBOSY_LIB_ONLY=1 loads the helper
+# functions without starting the interactive menu. Used by tests\RoboSy.Tests.ps1.
+if ($env:ROBOSY_LIB_ONLY -eq "1") { return }
 
 Initialize-LogPath
 Write-Log "INFO" ("RoboSy session started. PSVersion={0}, PID={1}, Admin={2}" -f $PSVersionTable.PSVersion, $PID, (Test-RunningAsAdministrator))

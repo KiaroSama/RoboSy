@@ -30,6 +30,8 @@ It is designed for users who want a simple Windows terminal workflow without man
 - Relaunch as Administrator by typing `admin` at prompts.
 - Fall back from directory symbolic links to junctions when symlink creation is blocked.
 - Refuse symbolic links, junctions, and other reparse points as Move/Copy sources to avoid accidentally moving the real target's contents.
+- Refuse drive roots, share roots, and protected system/profile roots as Move/Copy sources.
+- Transfer a selected folder as a folder, preserving its name at the destination, instead of flattening its contents into the destination root.
 - Print total elapsed time after each operation.
 - Write daily log files next to the script, with fallback to `%LOCALAPPDATA%\RoboSy\logs`.
 
@@ -111,13 +113,17 @@ The move operation uses `robocopy` to move a selected file or folder to a destin
 
 Use this when you want RoboSy to transfer data and remove the original copy after a successful move.
 
+For a folder source, RoboSy transfers the folder itself: entering destination `F:\B` for source `E:\A\Docs` moves it to `F:\B\Docs`, not into `F:\B` directly. A destination that already ends with the source folder's name (for example `F:\B\Docs`) is used as-is instead of doubling the name. A single file keeps its original file name at the destination.
+
+If the resolved final path already exists and holds other items, RoboSy shows what it found and asks for a separate confirmation before merging into it or overwriting a same-named file.
+
 If `robocopy` leaves an empty source folder behind after a directory move, RoboSy attempts to remove that empty source folder.
 
 Move uses `/XJ`, so nested junctions are excluded instead of being followed.
 
 ### Copy
 
-The copy operation uses `robocopy` to copy a selected file or folder to a destination path.
+The copy operation uses `robocopy` to copy a selected file or folder to a destination path, using the same folder-preserving destination behavior as Move.
 
 Use this when you want to keep the original item in place.
 
@@ -147,7 +153,8 @@ Behavior:
 
 - If the original path exists and the target path does not exist, RoboSy moves the item to the target path and creates a link at the original path.
 - If the original path is missing and the target path exists, RoboSy only creates the link.
-- If both paths already exist, RoboSy stops without overwriting either path.
+- If both paths already exist, RoboSy stops without overwriting either path, unless the target is an existing folder whose name already matches the source folder name; in that case RoboSy moves the source's contents into that existing folder before creating the link.
+- If the original path is already a symbolic link or junction, RoboSy leaves it untouched until you confirm the replacement, then removes only the link entry (never its target) immediately before creating the new link.
 - If directory symlinks are unavailable, RoboSy tries a junction fallback.
 
 ## Marker File
@@ -192,6 +199,7 @@ Runtime logs are ignored by Git and should not be published.
 | File | Purpose |
 | --- | --- |
 | `RoboSy.ps1` | Main interactive PowerShell script. |
+| `tests/RoboSy.Tests.ps1` | Non-interactive regression tests for path resolution and native-command wrappers. |
 | `RoboSy.cmd` | Normal launcher. |
 | `RoboSy Admin.cmd` | Administrator launcher. |
 | `Install-RoboSyPath.ps1` | Adds RoboSy to the user `PATH` and installs the command shim. |
@@ -239,6 +247,15 @@ Invoke-ScriptAnalyzer -Path . -Recurse -Settings .\PSScriptAnalyzerSettings.psd1
 ```
 
 A clean run reports no issues.
+
+Run the regression tests locally with either PowerShell version:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\RoboSy.Tests.ps1
+pwsh -NoProfile -File .\tests\RoboSy.Tests.ps1
+```
+
+Tests run entirely inside disposable temporary directories and clean up after themselves.
 
 ## Troubleshooting
 

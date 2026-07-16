@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Fixed Move and Copy for folder sources so the selected folder is transferred as a folder and keeps its own name at the destination, instead of flattening its contents into the selected destination path. A destination that already ends with the source folder's name is reused instead of doubling the name (for example, no more `...\Docs\Docs`). Single-file Move and Copy are unaffected and keep the original file name.
+- Fixed `Invoke-RobocopyCommand` and `Invoke-CmdDeleteCommand` so they return exactly one integer exit code. Native command output was previously captured into the same pipeline as the exit code, which could make a log entry read as `exitCode=System.Object[]` instead of a number such as `3`.
+- Fixed Move + Symlink so an existing symbolic link or junction at the original path is no longer removed during preview/validation. It is now removed only after the final confirmation, immediately before the replacement link is created, so cancelling leaves the existing link untouched.
+- Updated the README to describe the existing Move + Symlink behavior for a same-name existing target folder (merge instead of stop), matching the current code instead of the previously stale description.
+
+### Added
+
+- Move and Copy now show the effective final destination path (and, on collision, what already exists there) in the review screen, command preview, breadcrumbs, and logs before asking for confirmation.
+- Move and Copy now block drive roots, share roots, and protected system/profile roots as sources, matching the existing Fast Delete guard.
+- Added `tests/RoboSy.Tests.ps1`, a non-interactive regression test suite covering destination resolution, robocopy argument building, native-command return values, and symlink replacement safety.
+
 ## v1.2.0 - 2026-06-24
 
 ### Changed
