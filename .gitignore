@@ -116,10 +116,6 @@ Thumbs.db
 desktop.ini
 
 # Hook Maker: local/private files (auto-managed)
-!/.env.dist
-!/.env.example
-!/.env.sample
-!/.env.template
 /.agents/
 /.ai/
 /.claude/
@@ -128,6 +124,10 @@ desktop.ini
 /.cursor/
 /.env
 /.env.*
+!/.env.dist
+!/.env.example
+!/.env.sample
+!/.env.template
 /.kiro/
 /AGENTS.md
 /CLAUDE.md

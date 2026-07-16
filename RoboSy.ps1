@@ -1663,6 +1663,106 @@ function Get-StandardDestinationRejectReason {
     return $null
 }
 
+function Get-NearestExistingAncestorStatus {
+    param([AllowNull()][string]$Path)
+
+    $current = Normalize-PathForCompare $Path
+    while (-not [string]::IsNullOrWhiteSpace($current)) {
+        if (Test-Path -LiteralPath $current) {
+            return (Get-PathStatus $current)
+        }
+
+        $parent = Split-Path -Parent $current
+        if ([string]::IsNullOrWhiteSpace($parent) -or $parent.Equals($current, [StringComparison]::OrdinalIgnoreCase)) {
+            return $null
+        }
+
+        $current = $parent
+    }
+
+    return $null
+}
+
+# Centralizes what standard Move/Copy will actually do at the effective final
+# path: fresh creation, safe reuse, an explicit merge/overwrite that needs
+# confirmation, or a hard block (type conflict / unsupported reparse point).
+# Both the review screen and the execution-time revalidation call this, so
+# they can never disagree about what is about to happen. A reparse point
+# anywhere in the write path is unsafe because robocopy writes through it -
+# /XJ only excludes junctions encountered while recursing, it does not make a
+# linked destination argument safe.
+function Get-StandardFinalPathClassification {
+    param(
+        [hashtable]$SourceInfo,
+        [AllowNull()][string]$DestinationPath
+    )
+
+    $effectiveDestination = Resolve-EffectiveDestinationPath -SourceInfo $SourceInfo -DestinationPath $DestinationPath
+    $finalItemPath = Resolve-StandardFinalItemPath -SourceInfo $SourceInfo -DestinationPath $DestinationPath
+    $destinationInputStatus = Get-PathStatus $DestinationPath
+    $effectiveDestinationStatus = Get-PathStatus $effectiveDestination
+    $finalStatus = Get-PathStatus $finalItemPath
+
+    $result = @{
+        EffectiveDestination = $effectiveDestination
+        FinalItemPath        = $finalItemPath
+        FinalStatus          = $finalStatus
+        Classification       = $null
+        BlockReason          = $null
+        RequiresConfirmation = $false
+        ExistingItemCount    = 0
+    }
+
+    foreach ($candidate in @($destinationInputStatus, $effectiveDestinationStatus, $finalStatus)) {
+        if ($candidate.Exists -and $candidate.IsReparsePoint) {
+            $result.Classification = "UnsupportedReparsePoint"
+            $result.BlockReason = ("The destination path is a symbolic link, junction, or other reparse point: {0}" -f $candidate.Path)
+            return $result
+        }
+    }
+
+    $ancestorStatus = Get-NearestExistingAncestorStatus $effectiveDestination
+    if ($null -ne $ancestorStatus -and $ancestorStatus.IsReparsePoint) {
+        $result.Classification = "UnsupportedReparsePoint"
+        $result.BlockReason = ("An existing parent folder in the destination path is a symbolic link, junction, or other reparse point: {0}" -f $ancestorStatus.Path)
+        return $result
+    }
+
+    if (-not $finalStatus.Exists) {
+        $result.Classification = if ($SourceInfo.Type -eq "Directory") { "CreateDirectory" } else { "CreateFile" }
+        return $result
+    }
+
+    if ($SourceInfo.Type -eq "Directory") {
+        if ($finalStatus.Type -ne "Directory") {
+            $result.Classification = "TypeConflictDirectoryOntoFile"
+            $result.BlockReason = ("A folder cannot be transferred onto an existing file: {0}" -f $finalItemPath)
+            return $result
+        }
+
+        $result.ExistingItemCount = @(Get-ChildItem -LiteralPath $finalItemPath -Force -ErrorAction SilentlyContinue).Count
+        if ($result.ExistingItemCount -eq 0) {
+            $result.Classification = "ReuseEmptyDirectory"
+        }
+        else {
+            $result.Classification = "MergeDirectory"
+            $result.RequiresConfirmation = $true
+        }
+
+        return $result
+    }
+
+    if ($finalStatus.Type -eq "Directory") {
+        $result.Classification = "TypeConflictFileOntoDirectory"
+        $result.BlockReason = ("A file cannot overwrite an existing folder: {0}" -f $finalItemPath)
+        return $result
+    }
+
+    $result.Classification = "OverwriteFile"
+    $result.RequiresConfirmation = $true
+    return $result
+}
+
 function Get-StandardRobocopyArgs {
     param(
         [string]$Mode,
@@ -1700,8 +1800,9 @@ function Invoke-RobocopyJob {
 
     $startedAt = Get-Date
 
-    $effectiveDestination = Resolve-EffectiveDestinationPath -SourceInfo $SourceInfo -DestinationPath $DestinationInfo.Path
-    $finalItemPath = Resolve-StandardFinalItemPath -SourceInfo $SourceInfo -DestinationPath $DestinationInfo.Path
+    $classification = Get-StandardFinalPathClassification -SourceInfo $SourceInfo -DestinationPath $DestinationInfo.Path
+    $effectiveDestination = $classification.EffectiveDestination
+    $finalItemPath = $classification.FinalItemPath
 
     $breadcrumbSteps = New-Object System.Collections.Generic.List[object]
     $breadcrumbSteps.Add((New-BreadcrumbStep "Mode" (Get-ModeDisplayName $Mode) $script:UiColor.Accent))
@@ -1730,27 +1831,31 @@ function Invoke-RobocopyJob {
         return (Read-ReturnToMenu)
     }
 
+    if (-not [string]::IsNullOrWhiteSpace($classification.BlockReason)) {
+        Write-Line "Job stopped before anything was transferred." $script:UiColor.Error
+        Write-Line $classification.BlockReason $script:UiColor.Warning
+        Write-Log "ERROR" ("Standard job blocked by final-path classification: {0}; classification={1}; source={2}; destinationInput={3}" -f `
+            $classification.BlockReason, $classification.Classification, $SourceInfo.Path, $DestinationInfo.Path)
+        Write-Blank
+        return (Read-ReturnToMenu)
+    }
+
     $robocopyArgs = Get-StandardRobocopyArgs -Mode $Mode -SourceInfo $SourceInfo -EffectiveDestination $effectiveDestination
+    $finalStatus = $classification.FinalStatus
 
-    $finalStatus = Get-PathStatus $finalItemPath
-    $collisionMessage = $null
+    $finalPlan = switch ($classification.Classification) {
+        "CreateDirectory"     { "Create (does not exist yet)" }
+        "CreateFile"          { "Create (does not exist yet)" }
+        "ReuseEmptyDirectory" { "Reuse (existing empty folder)" }
+        "MergeDirectory"      { "Merge into an existing folder that already holds {0} item(s)" -f $classification.ExistingItemCount }
+        "OverwriteFile"       { "Overwrite (an existing file is already at this path)" }
+        default               { $classification.Classification }
+    }
 
-    if (-not $finalStatus.Exists) {
-        $finalPlan = "Create (does not exist yet)"
-    }
-    elseif ($finalStatus.Type -eq "Directory") {
-        $existingCount = @(Get-ChildItem -LiteralPath $finalItemPath -Force -ErrorAction SilentlyContinue).Count
-        if ($existingCount -eq 0) {
-            $finalPlan = "Reuse (existing empty folder)"
-        }
-        else {
-            $finalPlan = ("Merge into an existing folder that already holds {0} item(s)" -f $existingCount)
-            $collisionMessage = "Existing files with the same names inside that folder will be overwritten. Unrelated files already there are kept."
-        }
-    }
-    else {
-        $finalPlan = "Overwrite (an existing file is already at this path)"
-        $collisionMessage = "The existing file at the final path will be overwritten."
+    $collisionMessage = switch ($classification.Classification) {
+        "MergeDirectory" { "Existing files with the same names inside that folder will be overwritten. Unrelated files already there are kept." }
+        "OverwriteFile"  { "The existing file at the final path will be overwritten." }
+        default          { $null }
     }
 
     Write-LabelValue "Source type" $SourceInfo.Type $script:UiColor.Text
@@ -1760,8 +1865,8 @@ function Invoke-RobocopyJob {
     Write-PathStatusLog "Standard job source check" $SourceInfo
     Write-PathStatusLog "Standard job destination check" $DestinationInfo
     Write-PathStatusLog "Standard job final path check" $finalStatus
-    Write-Log "INFO" ("Job start: mode={0}, sourceType={1}, source={2}, destinationInput={3}, effectiveDestination={4}, finalPath={5}, finalPlan={6}" -f `
-        $Mode, $SourceInfo.Type, $SourceInfo.Path, $DestinationInfo.Path, $effectiveDestination, $finalItemPath, $finalPlan)
+    Write-Log "INFO" ("Job start: mode={0}, sourceType={1}, source={2}, destinationInput={3}, effectiveDestination={4}, finalPath={5}, classification={6}" -f `
+        $Mode, $SourceInfo.Type, $SourceInfo.Path, $DestinationInfo.Path, $effectiveDestination, $finalItemPath, $classification.Classification)
 
     if ($Mode -eq "MOVE") {
         Write-Hint "Move mode deletes source items after robocopy confirms they were copied."
@@ -1770,7 +1875,7 @@ function Invoke-RobocopyJob {
     Write-Blank
     Write-CommandPreview (Get-RobocopyCommandText -Arguments $robocopyArgs)
 
-    if (-not [string]::IsNullOrWhiteSpace($collisionMessage)) {
+    if ($classification.RequiresConfirmation) {
         Write-Line "The final path already exists." $script:UiColor.Warning
         Write-Line $collisionMessage $script:UiColor.Muted
         Write-Blank
@@ -1804,6 +1909,34 @@ function Invoke-RobocopyJob {
         Write-Line "The source path changed after the review, so nothing was transferred." $script:UiColor.Error
         Write-Line ("  {0}" -f $SourceInfo.Path) $script:UiColor.Path
         Write-Log "ERROR" ("Standard job aborted because the source changed after review: {0}" -f (Format-PathStatusForLog $sourceRecheck))
+        Write-Blank
+        return (Read-ReturnToMenu)
+    }
+
+    # Recompute the classification from the same confirmed inputs and compare
+    # it to what was shown at review time. The command that runs below is the
+    # SAME $robocopyArgs computed at preview time - this never recomputes it,
+    # it only decides whether it is still safe to run unchanged.
+    $executionClassification = Get-StandardFinalPathClassification -SourceInfo $SourceInfo -DestinationPath $DestinationInfo.Path
+    Write-PathStatusLog "Standard job final path recheck before execution" $executionClassification.FinalStatus
+    Write-Log "INFO" ("Execution-time classification: {0}; effectiveDestination={1}; finalPath={2}" -f `
+        $executionClassification.Classification, $executionClassification.EffectiveDestination, $executionClassification.FinalItemPath)
+
+    $classificationDrifted = (-not [string]::Equals($executionClassification.EffectiveDestination, $effectiveDestination, [StringComparison]::OrdinalIgnoreCase)) -or
+        (-not [string]::Equals($executionClassification.FinalItemPath, $finalItemPath, [StringComparison]::OrdinalIgnoreCase)) -or
+        ($executionClassification.Classification -ne $classification.Classification) -or
+        (-not [string]::IsNullOrWhiteSpace($executionClassification.BlockReason))
+
+    if ($classificationDrifted) {
+        Write-Line "The destination state changed after the review, so nothing was transferred." $script:UiColor.Error
+        if (-not [string]::IsNullOrWhiteSpace($executionClassification.BlockReason)) {
+            Write-Line $executionClassification.BlockReason $script:UiColor.Warning
+        }
+        else {
+            Write-Line ("Reviewed as: {0}; now: {1}" -f $classification.Classification, $executionClassification.Classification) $script:UiColor.Warning
+        }
+        Write-Log "ERROR" ("Standard job aborted: final-path classification drifted between review and execution. reviewed={0}; execution={1}" -f `
+            $classification.Classification, $executionClassification.Classification)
         Write-Blank
         return (Read-ReturnToMenu)
     }
@@ -2479,6 +2612,164 @@ function New-LinkSafe {
         return $false
     }
 }
+# Captures the state of an existing link (if any) and the intended new target
+# right before the final confirmation, so it can be re-verified unchanged
+# immediately after, and so a failed replacement can be rolled back to
+# exactly what was there before.
+function Get-LinkReplacementSnapshot {
+    param(
+        [string]$LinkPath,
+        [string]$NewTargetPath
+    )
+
+    $linkStatus = Get-PathStatus $LinkPath
+    $newTargetStatus = Get-PathStatus $NewTargetPath
+
+    return @{
+        LinkPath          = $LinkPath
+        NewTargetPath     = $NewTargetPath
+        LinkStatus        = $linkStatus
+        NewTargetStatus   = $newTargetStatus
+        IsReplaceableLink = (Test-IsReplaceableLinkStatus $linkStatus)
+    }
+}
+
+# Re-reads the same two paths and confirms nothing changed since the snapshot
+# was captured, so a stale preview can never drive the destructive step.
+function Test-LinkReplacementSnapshotUnchanged {
+    param([hashtable]$Snapshot)
+
+    $currentNewTargetStatus = Get-PathStatus $Snapshot.NewTargetPath
+    $newTargetUnchanged = $currentNewTargetStatus.Exists -and
+        $currentNewTargetStatus.Type -eq $Snapshot.NewTargetStatus.Type -and
+        -not $currentNewTargetStatus.IsReparsePoint
+
+    if (-not $Snapshot.IsReplaceableLink) {
+        return $newTargetUnchanged
+    }
+
+    $currentLinkStatus = Get-PathStatus $Snapshot.LinkPath
+
+    $linkUnchanged = (Test-IsReplaceableLinkStatus $currentLinkStatus) -and
+        $currentLinkStatus.Kind.Equals($Snapshot.LinkStatus.Kind, [StringComparison]::OrdinalIgnoreCase) -and
+        [string]::Equals($currentLinkStatus.LinkTarget, $Snapshot.LinkStatus.LinkTarget, [StringComparison]::OrdinalIgnoreCase)
+
+    return ($linkUnchanged -and $newTargetUnchanged)
+}
+
+# Restores a link that was removed as part of a replacement that then failed,
+# using the exact kind and target captured in the snapshot. The old target
+# itself is never touched by link replacement, so it is still there to link
+# back to.
+function Restore-PreviousLink {
+    param([hashtable]$Snapshot)
+
+    if (-not $Snapshot.IsReplaceableLink) {
+        return $true
+    }
+
+    $oldKind = $Snapshot.LinkStatus.Kind
+    $oldTarget = $Snapshot.LinkStatus.LinkTarget
+
+    try {
+        if ($oldKind -eq "Junction") {
+            New-RoboSyJunction -Path $Snapshot.LinkPath -Target $oldTarget | Out-Null
+        }
+        else {
+            New-RoboSySymbolicLink -Path $Snapshot.LinkPath -Target $oldTarget | Out-Null
+        }
+    }
+    catch {
+        Write-Log "ERROR" ("Rollback failed to restore previous link: {0} -> {1}: {2}" -f $Snapshot.LinkPath, $oldTarget, $_.Exception.Message)
+        return $false
+    }
+
+    $restoredStatus = Get-PathStatus $Snapshot.LinkPath
+    $restoredOk = (Test-IsReplaceableLinkStatus $restoredStatus) -and
+        $restoredStatus.Kind.Equals($oldKind, [StringComparison]::OrdinalIgnoreCase) -and
+        [string]::Equals($restoredStatus.LinkTarget, $oldTarget, [StringComparison]::OrdinalIgnoreCase)
+
+    if (-not $restoredOk) {
+        Write-Log "ERROR" ("Rollback restored a link but verification failed: {0}" -f (Format-PathStatusForLog $restoredStatus))
+    }
+
+    return $restoredOk
+}
+
+# The full replace-or-restore transaction for the original link path. Removal
+# of an existing link and creation of the new one happen back-to-back; if the
+# new link cannot be created or does not verify, the old link is restored
+# immediately and the job is reported as failed either way - never success.
+function Invoke-SafeLinkReplacement {
+    param(
+        [hashtable]$Snapshot,
+        [switch]$PreviewShown
+    )
+
+    $linkPath = $Snapshot.LinkPath
+    $targetPath = $Snapshot.NewTargetPath
+
+    if (-not $Snapshot.IsReplaceableLink) {
+        # Nothing to replace or roll back; this is a plain create-only link job.
+        return (New-LinkSafe -LinkPath $linkPath -TargetPath $targetPath -PreviewShown:$PreviewShown)
+    }
+
+    $capability = Test-LinkCreationCapability -LinkParent (Split-Path -Parent $linkPath) -ItemType $Snapshot.NewTargetStatus.Type
+    if (-not $capability.CanCreate) {
+        Write-Line "The existing link was left untouched because this session cannot create the required replacement link." $script:UiColor.Error
+        if (-not [string]::IsNullOrWhiteSpace($capability.Message)) {
+            Write-Line $capability.Message $script:UiColor.Muted
+        }
+        Write-Log "ERROR" ("Link replacement aborted before removal; capability check failed: {0}" -f $capability.Message)
+        return $false
+    }
+
+    if (-not (Remove-ExistingLinkOnly -Path $linkPath -Status $Snapshot.LinkStatus)) {
+        # Remove-ExistingLinkOnly already reported the failure; the old link is
+        # still there untouched, so there is nothing to roll back.
+        return $false
+    }
+
+    $created = New-LinkSafe -LinkPath $linkPath -TargetPath $targetPath -PreviewShown:$PreviewShown
+    $verified = $false
+
+    if ($created) {
+        $verifyStatus = Get-PathStatus $linkPath
+        $verified = (Test-IsReplaceableLinkStatus $verifyStatus) -and
+            [string]::Equals((Normalize-PathForCompare $verifyStatus.LinkTarget), (Normalize-PathForCompare $targetPath), [StringComparison]::OrdinalIgnoreCase)
+
+        if ($verified) {
+            return $true
+        }
+
+        Write-Line "The replacement link was created but did not verify against the requested target." $script:UiColor.Error
+        Write-Log "ERROR" ("Replacement link failed verification: {0}" -f (Format-PathStatusForLog $verifyStatus))
+    }
+
+    Write-Line "Restoring the previous link because the replacement could not be completed..." $script:UiColor.Warning
+    Write-Log "WARN" ("Attempting rollback for failed link replacement: {0}" -f $linkPath)
+
+    $restored = Restore-PreviousLink -Snapshot $Snapshot
+
+    if ($restored) {
+        Write-Line "The previous link was restored. No changes were made overall." $script:UiColor.Warning
+        Write-Log "INFO" ("Rollback restored previous link: {0}" -f $linkPath)
+    }
+    else {
+        Write-Line "CRITICAL: the previous link could not be restored automatically." $script:UiColor.Error
+        Write-Line ("  Original link path:   {0}" -f $Snapshot.LinkPath) $script:UiColor.Path
+        Write-Line ("  Original link target: {0}" -f $Snapshot.LinkStatus.LinkTarget) $script:UiColor.Path
+        Write-Line ("  Original link kind:   {0}" -f $Snapshot.LinkStatus.Kind) $script:UiColor.Path
+        Write-Line ("  Requested new target: {0}" -f $targetPath) $script:UiColor.Path
+        Write-Line "Manual recovery command:" $script:UiColor.Accent
+        $recoveryKindArg = if ($Snapshot.LinkStatus.Kind -eq "Junction") { "Junction" } else { "SymbolicLink" }
+        Write-CommandPreview ('New-Item -ItemType {0} -Path {1} -Target {2}' -f $recoveryKindArg, (Format-PowerShellArgument $Snapshot.LinkPath), (Format-PowerShellArgument $Snapshot.LinkStatus.LinkTarget))
+        Write-Log "ERROR" ("CRITICAL: rollback failed to restore previous link: {0}; originalTarget={1}; kind={2}" -f $Snapshot.LinkPath, $Snapshot.LinkStatus.LinkTarget, $Snapshot.LinkStatus.Kind)
+    }
+
+    return $false
+}
+
 function New-SymlinkMarkerFile {
     param(
         [string]$TargetPath,
@@ -2533,6 +2824,43 @@ function New-SymlinkMarkerFile {
 
         return $null
     }
+}
+
+# Shared completion reporting for Invoke-MoveAndLinkJob's two link-creation
+# paths (move-then-link, and create/replace-only), so the log/console output
+# for success and failure cannot drift between them.
+function Complete-MoveAndLinkJob {
+    param(
+        [bool]$Linked,
+        [string]$SourcePath,
+        [string]$TargetPath,
+        [datetime]$StartedAt
+    )
+
+    if ($Linked) {
+        Write-Log "INFO" ("Symbolic link created: {0} -> {1}" -f $SourcePath, $TargetPath)
+        $null = New-SymlinkMarkerFile -TargetPath $TargetPath -LinkPath $SourcePath
+    }
+    else {
+        Write-Log "ERROR" ("Symbolic link creation failed: {0} -> {1}" -f $SourcePath, $TargetPath)
+    }
+
+    Write-Blank
+    Write-Rule $script:UiColor.Border
+    if ($Linked) {
+        Write-Line "Move + symbolic link job completed." $script:UiColor.Success
+        Write-Log "INFO" ("Move+Link job completed.")
+    }
+    else {
+        Write-Line "Symbolic link job did not complete." $script:UiColor.Error
+        Write-Log "ERROR" ("Move+Link job did not complete.")
+    }
+    Write-TotalElapsedTime $StartedAt
+    Write-Log "INFO" ("Elapsed: {0}" -f (Format-ElapsedTime ((Get-Date) - $StartedAt)))
+    Write-Rule $script:UiColor.Border
+    Write-Blank
+
+    return (Read-ReturnToMenu)
 }
 
 function Invoke-MoveAndLinkJob {
@@ -2679,6 +3007,11 @@ function Invoke-MoveAndLinkJob {
         }
     }
     else {
+        # Captured now, before the confirmation prompt, and re-verified
+        # unchanged immediately after it - so nothing about the existing link
+        # or the new target is removed or trusted based on a stale preview.
+        $linkSnapshot = Get-LinkReplacementSnapshot -LinkPath $sourcePath -NewTargetPath $targetPath
+
         if ($sourceIsReplaceableLink) {
             Write-Hint ("The original path is an existing {0} and the real target exists." -f $sourceStatus.Kind)
             Write-Hint "The existing link is replaced with a new link only after you confirm; its target is never followed."
@@ -2704,34 +3037,25 @@ function Invoke-MoveAndLinkJob {
             return "MENU"
         }
         Write-Blank
+
+        if (-not (Test-LinkReplacementSnapshotUnchanged -Snapshot $linkSnapshot)) {
+            Write-Line "The original link or the new target changed after the review, so nothing was replaced." $script:UiColor.Error
+            Write-Log "ERROR" ("Link replacement aborted: state changed since preview. link={0}; target={1}" -f $sourcePath, $targetPath)
+            Write-Blank
+            return (Read-ReturnToMenu)
+        }
+
+        $linked = Invoke-SafeLinkReplacement -Snapshot $linkSnapshot -PreviewShown:$linkPreviewShown
+        return (Complete-MoveAndLinkJob -Linked $linked -SourcePath $sourcePath -TargetPath $targetPath -StartedAt $startedAt)
     }
 
-    $linked = New-LinkSafe -LinkPath $sourcePath -TargetPath $targetPath -PreviewShown:$linkPreviewShown
-
-    if ($linked) {
-        Write-Log "INFO" ("Symbolic link created: {0} -> {1}" -f $sourcePath, $targetPath)
-        $null = New-SymlinkMarkerFile -TargetPath $targetPath -LinkPath $sourcePath
-    }
-    else {
-        Write-Log "ERROR" ("Symbolic link creation failed: {0} -> {1}" -f $sourcePath, $targetPath)
-    }
-
-    Write-Blank
-    Write-Rule $script:UiColor.Border
-    if ($linked) {
-        Write-Line "Move + symbolic link job completed." $script:UiColor.Success
-        Write-Log "INFO" ("Move+Link job completed.")
-    }
-    else {
-        Write-Line "Symbolic link job did not complete." $script:UiColor.Error
-        Write-Log "ERROR" ("Move+Link job did not complete.")
-    }
-    Write-TotalElapsedTime $startedAt
-    Write-Log "INFO" ("Elapsed: {0}" -f (Format-ElapsedTime ((Get-Date) - $startedAt)))
-    Write-Rule $script:UiColor.Border
-    Write-Blank
-
-    return (Read-ReturnToMenu)
+    # The original path was real and has just been moved away by robocopy
+    # above; it is confirmed gone, so this is always a create-only link (never
+    # a replacement), and the snapshot below is captured fresh with no prompt
+    # in between.
+    $linkSnapshot = Get-LinkReplacementSnapshot -LinkPath $sourcePath -NewTargetPath $targetPath
+    $linked = Invoke-SafeLinkReplacement -Snapshot $linkSnapshot -PreviewShown:$linkPreviewShown
+    return (Complete-MoveAndLinkJob -Linked $linked -SourcePath $sourcePath -TargetPath $targetPath -StartedAt $startedAt)
 }
 
 # Test hook: dot-sourcing this script with ROBOSY_LIB_ONLY=1 loads the helper

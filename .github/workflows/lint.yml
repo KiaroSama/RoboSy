@@ -56,3 +56,31 @@ jobs:
             throw "PSScriptAnalyzer reported $($results.Count) issue(s)."
           }
           Write-Host "PSScriptAnalyzer found no issues."
+
+      - name: Regression tests (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          $failed = $false
+          Get-ChildItem -Path .\tests -Filter *.Tests.ps1 | ForEach-Object {
+            Write-Host "== $($_.Name) (Windows PowerShell 5.1) ==" -ForegroundColor Cyan
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -File $_.FullName
+            if ($LASTEXITCODE -ne 0) {
+              $failed = $true
+              Write-Host "$($_.Name) failed under Windows PowerShell 5.1 (exit code $LASTEXITCODE)." -ForegroundColor Red
+            }
+          }
+          if ($failed) { throw "One or more regression test files failed under Windows PowerShell 5.1." }
+
+      - name: Regression tests (PowerShell 7+)
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem -Path .\tests -Filter *.Tests.ps1 | ForEach-Object {
+            Write-Host "== $($_.Name) (PowerShell 7+) ==" -ForegroundColor Cyan
+            pwsh -NoProfile -File $_.FullName
+            if ($LASTEXITCODE -ne 0) {
+              $failed = $true
+              Write-Host "$($_.Name) failed under PowerShell 7+ (exit code $LASTEXITCODE)." -ForegroundColor Red
+            }
+          }
+          if ($failed) { throw "One or more regression test files failed under PowerShell 7+." }
