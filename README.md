@@ -112,7 +112,7 @@ For drag and drop, drop the path into the terminal, then press Enter to confirm 
 
 RoboSy keeps your completed selections (mode, source, destination) visible in a "Selections so far" block at the top of every step, so you can see the previous steps as you move forward. Before any job runs, RoboSy shows a final summary and asks you to confirm.
 
-Prompts read input through the active console host's own line editor, so Backspace, Escape-to-clear, arrow-key movement, and Ctrl+C behave the same way they do anywhere else in that terminal. If the host does not implement its own line reader, RoboSy falls back to reading directly from the console.
+RoboSy delegates line editing to the active PowerShell host instead of implementing its own key-processing loop. Editing behavior such as Backspace, arrow keys, Escape, history, and Ctrl+C may vary by host and terminal. If the active host has no usable line reader or throws `NotImplementedException`, RoboSy falls back to `[Console]::ReadLine()`.
 
 ## Operations
 
@@ -273,14 +273,14 @@ Each test file prints its own passed/failed/skipped counts and exits non-zero on
 
 ### Manual terminal smoke test
 
-Automated tests inject a fake host-line reader for the non-redirected input path, since a real console line editor (Backspace, Escape, arrow keys, Ctrl+C) needs an actual keyboard and terminal to drive. Before relying on a change to `Read-ConsoleText`/`Read-HostUiLine`, run RoboSy in a real terminal under both Windows PowerShell 5.1 and PowerShell 7+ and check:
+Automated tests inject a fake host-line reader for the non-redirected input path, since driving the active host's real line editor needs an actual keyboard and terminal. RoboSy delegates that editing to the host rather than implementing it, so exact behavior for Backspace, arrow keys, Escape, and Ctrl+C can vary by host and terminal — verify it in the specific host you care about rather than assuming one terminal's behavior applies everywhere. Before relying on a change to `Read-ConsoleText`/`Read-HostUiLine`, run RoboSy in a real terminal under both Windows PowerShell 5.1 and PowerShell 7+ and check:
 
 - Ordinary typing and Enter
 - Pasting a path
 - Explorer drag-and-drop, then pressing Enter to confirm it
 - Backspace
 - Arrow-key editing (left/right, and recalling history if your terminal supports it)
-- Escape (clears the current line)
+- Escape (behavior is host-defined; ConsoleHost typically clears the current line)
 - Typing `admin`, `0`, `exit`, and `quit`
 - Ctrl+C
 - Unicode text

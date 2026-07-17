@@ -1067,12 +1067,15 @@ function Read-ConsoleFallbackLine {
     return [Console]::ReadLine()
 }
 
-# Reads one line from the active host's own line editor (backspace,
-# Escape-to-clear, arrow-key movement, Ctrl+C all come from the host, not from
-# hand-rolled key handling). $HostUi defaults to the real $Host.UI in
-# production; tests inject a fake UI object to exercise the fallback paths
-# deterministically, since $Host itself is read-only and cannot be replaced.
-# A host with no UI, or whose ReadLine() is not implemented, falls back to
+# Delegates line editing to the active PowerShell host instead of a
+# hand-rolled key-processing loop. PSHostUserInterface.ReadLine() guarantees
+# line input, but exact editing behavior (backspace, arrow keys, Escape,
+# history, Ctrl+C) is host-defined and can vary between ConsoleHost, Windows
+# Terminal, PowerShell 5.1, PowerShell 7+, and other hosts. $HostUi defaults
+# to the real $Host.UI in production; tests inject a fake UI object to
+# exercise the fallback paths deterministically, since $Host itself is
+# read-only and cannot be replaced. A host with no usable UI, or whose
+# ReadLine() throws NotImplementedException, falls back to
 # Read-ConsoleFallbackLine. Any other exception (including cancellation) is
 # never caught here.
 function Read-HostUiLine {

@@ -6,13 +6,20 @@
 # $Host is a read-only automatic variable, so it cannot be swapped to test
 # Read-HostUiLine's fallback behavior. Instead Read-HostUiLine accepts an
 # optional -HostUi parameter (defaulting to the real $Host.UI in production);
-# these tests pass fake PSCustomObject stand-ins with a ReadLine() ScriptMethod
-# to force each branch deterministically. Read-ConsoleText's own orchestration
-# (call count, passthrough, admin re-prompt, no double prompt) is tested the
-# same way every other test file mocks RoboSy helpers: by redefining the
-# functions it calls (Read-HostUiLine, Test-ConsoleInputIsRedirected,
-# Write-ConsolePrompt, Invoke-AdminSwitch) in this process's own scope, since
-# PowerShell resolves unqualified function calls dynamically at call time.
+# these tests pass fake stand-ins defined below as real PowerShell classes
+# (FakeSuccessHostUi, FakeNotImplementedHostUi, FakeOtherFailureHostUi) to
+# force each branch deterministically. A PSCustomObject + ScriptMethod was
+# tried first and rejected: PowerShell wraps an exception thrown from a
+# ScriptMethod in MethodInvocationException/RuntimeException (verified
+# directly), which a real compiled PSHostUserInterface override would not do,
+# so `catch [System.NotImplementedException]` in Read-HostUiLine would not
+# have matched it. A class method throws its exception unwrapped, matching
+# real host behavior. Read-ConsoleText's own orchestration (call count,
+# passthrough, admin re-prompt, no double prompt) is tested the same way
+# every other test file mocks RoboSy helpers: by redefining the functions it
+# calls (Read-HostUiLine, Test-ConsoleInputIsRedirected, Write-ConsolePrompt,
+# Invoke-AdminSwitch) in this process's own scope, since PowerShell resolves
+# unqualified function calls dynamically at call time.
 #
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\RoboSy.Input.Tests.ps1
 #   pwsh -NoProfile -File .\tests\RoboSy.Input.Tests.ps1

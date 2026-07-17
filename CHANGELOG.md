@@ -11,7 +11,7 @@
 - Fixed the `.gitignore` Hook Maker block so its `!/.env.example`-style exceptions come after the broad `/.env.*` rule instead of before it; the exceptions were previously overridden by the later broad rule and had no effect.
 - Fixed `.github/workflows/lint.yml` so the regression-test steps fail closed when zero `tests/*.Tests.ps1` files are discovered (for example, a missing or emptied `tests` directory), instead of silently reporting success. Discovered test file names are now printed before they run.
 - Removed dead code (`Write-PathBlock`), an always-`-Force` branch (`New-RoboSyDirectory`), and a one-line pass-through wrapper (`ConvertTo-NewItemParentPath`) found by an over-engineering audit.
-- Replaced `Read-ConsoleText`'s hand-rolled character-by-character key-reading loop with the console host's own line editor (`$Host.UI.ReadLine()`, with a `[Console]::ReadLine()` fallback for hosts with no usable UI or an unimplemented `ReadLine()`), so Backspace, Escape, arrow-key movement, and Ctrl+C come from the host instead of a bespoke reimplementation.
+- Replaced `Read-ConsoleText`'s hand-rolled character-by-character key-reading loop with the active PowerShell host's own line editor (`$Host.UI.ReadLine()`, with a `[Console]::ReadLine()` fallback for hosts with no usable UI or an unimplemented `ReadLine()`). Editing behavior such as Backspace, arrow keys, Escape, history, and Ctrl+C now comes from the host instead of a bespoke reimplementation, and can vary by host and terminal the same way it does for any other PowerShell prompt.
 
 ### Added
 
