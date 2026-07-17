@@ -5,11 +5,15 @@ on:
     branches: [main]
     paths:
       - "**/*.ps1"
+      - "RoboSy.ps1"
+      - "tests/**/*.ps1"
       - "PSScriptAnalyzerSettings.psd1"
       - ".github/workflows/lint.yml"
   pull_request:
     paths:
       - "**/*.ps1"
+      - "RoboSy.ps1"
+      - "tests/**/*.ps1"
       - "PSScriptAnalyzerSettings.psd1"
       - ".github/workflows/lint.yml"
   workflow_dispatch:
@@ -23,7 +27,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Install PSScriptAnalyzer
         shell: pwsh
@@ -60,13 +66,20 @@ jobs:
       - name: Regression tests (Windows PowerShell 5.1)
         shell: powershell
         run: |
+          $testFiles = @(Get-ChildItem -Path .\tests -Filter *.Tests.ps1 -File)
+          if ($testFiles.Count -eq 0) {
+            throw "No regression test files were found."
+          }
+          Write-Host ("Discovered {0} regression test file(s):" -f $testFiles.Count) -ForegroundColor Cyan
+          $testFiles | ForEach-Object { Write-Host ("  - {0}" -f $_.Name) -ForegroundColor Cyan }
+
           $failed = $false
-          Get-ChildItem -Path .\tests -Filter *.Tests.ps1 | ForEach-Object {
-            Write-Host "== $($_.Name) (Windows PowerShell 5.1) ==" -ForegroundColor Cyan
-            powershell.exe -NoProfile -ExecutionPolicy Bypass -File $_.FullName
+          foreach ($testFile in $testFiles) {
+            Write-Host "== $($testFile.Name) (Windows PowerShell 5.1) ==" -ForegroundColor Cyan
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -File $testFile.FullName
             if ($LASTEXITCODE -ne 0) {
               $failed = $true
-              Write-Host "$($_.Name) failed under Windows PowerShell 5.1 (exit code $LASTEXITCODE)." -ForegroundColor Red
+              Write-Host "$($testFile.Name) failed under Windows PowerShell 5.1 (exit code $LASTEXITCODE)." -ForegroundColor Red
             }
           }
           if ($failed) { throw "One or more regression test files failed under Windows PowerShell 5.1." }
@@ -74,13 +87,20 @@ jobs:
       - name: Regression tests (PowerShell 7+)
         shell: pwsh
         run: |
+          $testFiles = @(Get-ChildItem -Path .\tests -Filter *.Tests.ps1 -File)
+          if ($testFiles.Count -eq 0) {
+            throw "No regression test files were found."
+          }
+          Write-Host ("Discovered {0} regression test file(s):" -f $testFiles.Count) -ForegroundColor Cyan
+          $testFiles | ForEach-Object { Write-Host ("  - {0}" -f $_.Name) -ForegroundColor Cyan }
+
           $failed = $false
-          Get-ChildItem -Path .\tests -Filter *.Tests.ps1 | ForEach-Object {
-            Write-Host "== $($_.Name) (PowerShell 7+) ==" -ForegroundColor Cyan
-            pwsh -NoProfile -File $_.FullName
+          foreach ($testFile in $testFiles) {
+            Write-Host "== $($testFile.Name) (PowerShell 7+) ==" -ForegroundColor Cyan
+            pwsh -NoProfile -File $testFile.FullName
             if ($LASTEXITCODE -ne 0) {
               $failed = $true
-              Write-Host "$($_.Name) failed under PowerShell 7+ (exit code $LASTEXITCODE)." -ForegroundColor Red
+              Write-Host "$($testFile.Name) failed under PowerShell 7+ (exit code $LASTEXITCODE)." -ForegroundColor Red
             }
           }
           if ($failed) { throw "One or more regression test files failed under PowerShell 7+." }

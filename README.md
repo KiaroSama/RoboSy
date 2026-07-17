@@ -112,6 +112,8 @@ For drag and drop, drop the path into the terminal, then press Enter to confirm 
 
 RoboSy keeps your completed selections (mode, source, destination) visible in a "Selections so far" block at the top of every step, so you can see the previous steps as you move forward. Before any job runs, RoboSy shows a final summary and asks you to confirm.
 
+Prompts read input through the active console host's own line editor, so Backspace, Escape-to-clear, arrow-key movement, and Ctrl+C behave the same way they do anywhere else in that terminal. If the host does not implement its own line reader, RoboSy falls back to reading directly from the console.
+
 ## Operations
 
 ### Move
@@ -211,6 +213,7 @@ Runtime logs are ignored by Git and should not be published.
 | `tests/RoboSy.Tests.ps1` | Regression tests for destination resolution and native-command wrappers. |
 | `tests/RoboSy.LinkSafety.Tests.ps1` | Regression tests for the rollback-safe Move + Symlink replacement transaction. |
 | `tests/RoboSy.Classification.Tests.ps1` | Regression tests for final-path classification, type conflicts, reparse-point hardening, and execution-time revalidation. |
+| `tests/RoboSy.Input.Tests.ps1` | Regression tests for `Read-ConsoleText`'s redirected/non-redirected input paths and the `Read-HostUiLine` fallback chain. |
 | `RoboSy.cmd` | Normal launcher. |
 | `RoboSy Admin.cmd` | Administrator launcher. |
 | `Install-RoboSyPath.ps1` | Adds RoboSy to the user `PATH` and installs the command shim. |
@@ -248,7 +251,7 @@ These local paths are intentionally ignored by Git:
 
 ## Development
 
-RoboSy is linted with [PSScriptAnalyzer](https://learn.microsoft.com/powershell/utility-modules/psscriptanalyzer/overview) using the rules in `PSScriptAnalyzerSettings.psd1`, and its regression tests run under both Windows PowerShell 5.1 and PowerShell 7+. The same checks run in GitHub Actions (`.github/workflows/lint.yml`) on every push and pull request that touches a `.ps1` file.
+RoboSy is linted with [PSScriptAnalyzer](https://learn.microsoft.com/powershell/utility-modules/psscriptanalyzer/overview) using the rules in `PSScriptAnalyzerSettings.psd1`, and its regression tests run under both Windows PowerShell 5.1 and PowerShell 7+. The same checks run in GitHub Actions (`.github/workflows/lint.yml`, using `actions/checkout@v7` with `persist-credentials: false`) on every push and pull request that touches `RoboSy.ps1`, a file under `tests/`, the analyzer settings, or the workflow itself. CI fails closed if zero `tests/*.Tests.ps1` files are discovered, instead of silently reporting success.
 
 Run the checks locally before pushing:
 
@@ -266,7 +269,22 @@ Get-ChildItem .\tests -Filter *.Tests.ps1 | ForEach-Object { powershell.exe -NoP
 Get-ChildItem .\tests -Filter *.Tests.ps1 | ForEach-Object { pwsh -NoProfile -File $_.FullName }
 ```
 
-Each test file prints its own passed/failed/skipped counts and exits non-zero on any failure. Tests run entirely inside disposable temporary directories and clean up after themselves; the interactive end-to-end scenarios in `RoboSy.LinkSafety.Tests.ps1` and `RoboSy.Classification.Tests.ps1` drive a disposable copy of `RoboSy.ps1` through piped input, so its own log directory never touches the real repository.
+Each test file prints its own passed/failed/skipped counts and exits non-zero on any failure. Tests run entirely inside disposable temporary directories and clean up after themselves; the interactive end-to-end scenarios in `RoboSy.LinkSafety.Tests.ps1` and `RoboSy.Classification.Tests.ps1` drive a disposable copy of `RoboSy.ps1` through piped input, so its own log directory never touches the real repository. `RoboSy.Input.Tests.ps1` covers `Read-ConsoleText`'s redirected and non-redirected input paths, including the `Read-HostUiLine` host-line-reader fallback chain, using injected fakes rather than a real keyboard.
+
+### Manual terminal smoke test
+
+Automated tests inject a fake host-line reader for the non-redirected input path, since a real console line editor (Backspace, Escape, arrow keys, Ctrl+C) needs an actual keyboard and terminal to drive. Before relying on a change to `Read-ConsoleText`/`Read-HostUiLine`, run RoboSy in a real terminal under both Windows PowerShell 5.1 and PowerShell 7+ and check:
+
+- Ordinary typing and Enter
+- Pasting a path
+- Explorer drag-and-drop, then pressing Enter to confirm it
+- Backspace
+- Arrow-key editing (left/right, and recalling history if your terminal supports it)
+- Escape (clears the current line)
+- Typing `admin`, `0`, `exit`, and `quit`
+- Ctrl+C
+- Unicode text
+- A path containing spaces, an apostrophe, and `[`/`]` characters
 
 ## Troubleshooting
 

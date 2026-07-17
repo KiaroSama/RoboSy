@@ -1053,6 +1053,43 @@ function Get-RobocopyExitDescription {
     }
 }
 
+# Wraps [Console]::IsInputRedirected in a function so tests can force the
+# non-redirected branch of Read-ConsoleText without a real, piped-free
+# terminal session.
+function Test-ConsoleInputIsRedirected {
+    return [Console]::IsInputRedirected
+}
+
+# The last-resort line reader when the active host has no usable UI. Kept as
+# its own function (instead of calling [Console]::ReadLine() inline) purely so
+# tests can replace it and avoid ever blocking on a real console.
+function Read-ConsoleFallbackLine {
+    return [Console]::ReadLine()
+}
+
+# Reads one line from the active host's own line editor (backspace,
+# Escape-to-clear, arrow-key movement, Ctrl+C all come from the host, not from
+# hand-rolled key handling). $HostUi defaults to the real $Host.UI in
+# production; tests inject a fake UI object to exercise the fallback paths
+# deterministically, since $Host itself is read-only and cannot be replaced.
+# A host with no UI, or whose ReadLine() is not implemented, falls back to
+# Read-ConsoleFallbackLine. Any other exception (including cancellation) is
+# never caught here.
+function Read-HostUiLine {
+    param($HostUi = $Host.UI)
+
+    if ($null -ne $HostUi) {
+        try {
+            return $HostUi.ReadLine()
+        }
+        catch [System.NotImplementedException] {
+            # Fall through to the console fallback below.
+        }
+    }
+
+    return Read-ConsoleFallbackLine
+}
+
 function Read-ConsoleText {
     param(
         [string]$Prompt,
@@ -1061,7 +1098,7 @@ function Read-ConsoleText {
 
     $displayPrompt = Format-ConsolePromptText -Prompt $Prompt -HideNavigation:$HideNavigation
 
-    if ([Console]::IsInputRedirected) {
+    if (Test-ConsoleInputIsRedirected) {
         $redirectedInput = Read-Host $displayPrompt
         if (Test-AdminInput $redirectedInput) {
             $null = Invoke-AdminSwitch
@@ -1071,13 +1108,9 @@ function Read-ConsoleText {
         return $redirectedInput
     }
 
-    # $Host.UI.ReadLine() uses the console's own native line editor (backspace,
-    # Escape-to-clear, arrow-key movement, Ctrl+C) instead of hand-rolling
-    # character-by-character key handling; it never prints its own prompt, so
-    # it composes cleanly with the colored prompt already written above.
     while ($true) {
         Write-ConsolePrompt -Prompt $Prompt -HideNavigation:$HideNavigation
-        $inputText = $Host.UI.ReadLine()
+        $inputText = Read-HostUiLine
 
         if (Test-AdminInput $inputText) {
             $null = Invoke-AdminSwitch
