@@ -144,6 +144,8 @@ try {
     $d2Link = Join-Path $d2Root "LinkHere"
 
     $d2Result = Invoke-RoboSyInteractive -SandboxRoot $d2Root -InputLines @("5", $d2Link, $d2Real, "y", "exit")
+    Assert-True "direction 2 exits cleanly" ($d2Result.ExitCode -eq 0) ("exit code {0}" -f $d2Result.ExitCode)
+    Assert-True "direction 2 reports completion" ($d2Result.Output -match "Symlink-only job completed")
     Assert-True "direction 2 (reversed order) also creates the link at the missing side" ((Get-PathStatus $d2Link).IsReparsePoint)
     Assert-True "direction 2 link resolves into the real folder" (Test-Path -LiteralPath (Join-Path $d2Link "payload.txt"))
     Assert-True "direction 2 NEVER moved the real item" (Test-Path -LiteralPath (Join-Path $d2Real "payload.txt"))
