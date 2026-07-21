@@ -24,6 +24,7 @@ It is designed for users who want a simple Windows terminal workflow without man
 - Copy files and folders with `robocopy`.
 - Permanently delete files or folders without using the Recycle Bin.
 - Move data to a new location and leave a symbolic link or junction at the original path.
+- Create a symbolic link only, without moving anything, and let RoboSy work out the direction so the order of the two paths does not matter (Symlink Only).
 - Accept typed, pasted, or drag-and-dropped paths in normal terminal mode, confirmed with Enter (no auto-accept).
 - Keep your previous selections visible at the top of each step instead of clearing the screen.
 - Ask for an explicit confirmation before every move, copy, delete, or link job runs.
@@ -99,6 +100,7 @@ Run RoboSy, then choose an option from the main menu.
 | `2` | Copy a file or folder with `robocopy`. |
 | `3` | Permanently delete a file or folder without the Recycle Bin. |
 | `4` | Move an item to a target path, then create a symbolic link or junction at the original path. |
+| `5` | Create a symbolic link only (never move); the order of the two paths does not matter. |
 
 Prompt shortcuts:
 
@@ -167,9 +169,29 @@ Behavior:
 - If creating the replacement link fails after the old link was removed, RoboSy immediately restores the original link and reports the job as failed. If the restore itself cannot complete, RoboSy reports a critical error with the original link's target and a manual recovery command; the old target is never deleted or modified either way.
 - If directory symlinks are unavailable, RoboSy tries a junction fallback.
 
+### Symlink Only
+
+Option `5` creates a symbolic link only and never moves anything. It asks for two paths, and the order does not matter:
+
+1. **Path 1**
+2. **Path 2**
+
+RoboSy inspects both paths and works out the direction for you, so you do not have to remember which one is the source and which is the destination:
+
+- Whichever path is a real, existing file or folder (not itself a link) becomes the link **target**.
+- The other path — the one that is missing, or is already a symbolic link or junction — becomes the **link** location.
+
+Behavior:
+
+- If one path holds a real file/folder and the other is missing, RoboSy creates the link at the missing path, pointing to the real item. Nothing is moved.
+- If the link side is already a symbolic link or junction, RoboSy replaces it with the same rollback-safe transaction used by Move + Symlink: the old link is removed only immediately before the new link is created, its target is never followed, and a failed replacement restores the original link and reports failure.
+- If **both** paths already hold a real file or folder, RoboSy stops without changing anything (it never overwrites a real item).
+- If **neither** path holds a real file or folder, RoboSy stops, because there is nothing to link to.
+- If directory symlinks are unavailable, RoboSy tries a junction fallback, exactly like Move + Symlink.
+
 ## Marker File
 
-After a successful Move + Symlink job, RoboSy writes a marker file at the real target so the original link path can be traced later.
+After a successful Move + Symlink or Symlink Only job, RoboSy writes a marker file at the real target so the link path can be traced later.
 
 | Target type | Marker location | Marker name |
 | --- | --- | --- |
@@ -214,6 +236,7 @@ Runtime logs are ignored by Git and should not be published.
 | `tests/RoboSy.LinkSafety.Tests.ps1` | Regression tests for the rollback-safe Move + Symlink replacement transaction. |
 | `tests/RoboSy.Classification.Tests.ps1` | Regression tests for final-path classification, type conflicts, reparse-point hardening, and execution-time revalidation. |
 | `tests/RoboSy.Input.Tests.ps1` | Regression tests for `Read-ConsoleText`'s redirected/non-redirected input paths and the `Read-HostUiLine` fallback chain. |
+| `tests/RoboSy.SymlinkOnly.Tests.ps1` | Regression tests for Symlink Only direction detection and its create-only, never-move end-to-end behavior. |
 | `RoboSy.cmd` | Normal launcher. |
 | `RoboSy Admin.cmd` | Administrator launcher. |
 | `Install-RoboSyPath.ps1` | Adds RoboSy to the user `PATH` and installs the command shim. |

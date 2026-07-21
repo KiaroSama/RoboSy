@@ -12,6 +12,11 @@
 #              the target path does not exist, the item is moved to the target
 #              path with robocopy first, then a symbolic link is created at the
 #              original path.
+#   5. Symlink Only - Create a symbolic link only; nothing is ever moved.
+#              Order does not matter: whichever of the two paths holds the real
+#              file/folder becomes the link target, and the other (missing) path
+#              becomes the link. Refuses to run if both paths hold real items or
+#              if neither does.
 #
 # Navigation:
 #   - Type "exit" at any prompt to quit.
@@ -575,6 +580,7 @@ function Get-ModeDisplayName {
         "COPY" { return "Copy" }
         "DELETE" { return "Fast Delete" }
         "LINK" { return "Move + Symlink" }
+        "SYMONLY" { return "Symlink Only" }
         default { return $Mode }
     }
 }
@@ -1364,6 +1370,7 @@ function Read-MainChoice {
         Write-MenuOption "2" "Copy" "Copy a folder tree or a single file with robocopy." Green
         Write-MenuOption "3" "Fast Delete" "Permanently delete a file or folder with robocopy purge; no Recycle Bin." Red
         Write-MenuOption "4" "Move + Symlink" "Move the real item to a target path, then leave a link at the original path." Cyan
+        Write-MenuOption "5" "Symlink Only" "Only create a symbolic link; nothing is moved. Order of the two paths does not matter." Blue
         Write-Blank
 
         $choice = Read-ConsoleText "Choose Option [1]"
@@ -1385,9 +1392,10 @@ function Read-MainChoice {
             "2" { return "COPY" }
             "3" { return "DELETE" }
             "4" { return "LINK" }
+            "5" { return "SYMONLY" }
             default {
                 Write-Blank
-                Write-Line "Invalid option. Choose 1, 2, 3, 4, or press Enter for 1." $script:UiColor.Error
+                Write-Line "Invalid option. Choose 1, 2, 3, 4, 5, or press Enter for 1." $script:UiColor.Error
                 Start-Sleep -Seconds 1
             }
         }
@@ -1410,6 +1418,11 @@ function Read-SourcePath {
                 Write-Hint "If this path currently contains a real file/folder, it can be moved to the target path first."
                 Write-Hint "If this path does not exist, the script will create only the link after you enter an existing target."
             }
+            "SYMONLY" {
+                Write-Line "Enter the first path. Order does not matter; nothing is ever moved." $script:UiColor.Text
+                Write-Hint "One of the two paths must be a real file/folder (the link target); the other is where the link is created."
+                Write-Hint "This path may be the real item or the missing side - RoboSy figures out the direction for you."
+            }
             "DELETE" {
                 Write-Line "Enter the existing file or folder to permanently delete." $script:UiColor.Text
                 Write-Hint "This bypasses the Recycle Bin and uses robocopy purge for faster folder deletion."
@@ -1423,7 +1436,11 @@ function Read-SourcePath {
         Write-Hint "Type, paste, or drag/drop a path, then press Enter to confirm."
         Write-Blank
 
-        $prompt = if ($Mode -eq "DELETE") { "Delete path" } else { "Source" }
+        $prompt = switch ($Mode) {
+            "DELETE" { "Delete path" }
+            "SYMONLY" { "Path 1" }
+            default { "Source" }
+        }
         $inputPath = Read-ConsoleText $prompt
         if (Test-ExitInput $inputPath) { return @{ Action = "EXIT" } }
         if (Test-BackInput $inputPath) { return @{ Action = "BACK" } }
@@ -1431,7 +1448,7 @@ function Read-SourcePath {
         $normalizedInputPath = Normalize-UserPath $inputPath
         Write-Log "INFO" ("Source path received: raw={0}; normalized={1}; mode={2}" -f $inputPath, $normalizedInputPath, $Mode)
 
-        $allowMissing = ($Mode -eq "LINK")
+        $allowMissing = ($Mode -eq "LINK" -or $Mode -eq "SYMONLY")
         $sourceInfo = Get-PathInfo -InputPath $inputPath -AllowMissing:$allowMissing
         if ($null -ne $sourceInfo) {
             Write-PathStatusLog "Source path normalized" $sourceInfo
@@ -1441,6 +1458,9 @@ function Read-SourcePath {
             Write-Blank
             if ($Mode -eq "LINK") {
                 Write-Line "Source/link path is invalid." $script:UiColor.Error
+            }
+            elseif ($Mode -eq "SYMONLY") {
+                Write-Line "First path is invalid." $script:UiColor.Error
             }
             elseif ($Mode -eq "DELETE") {
                 Write-Line "Delete path does not exist." $script:UiColor.Error
@@ -1489,7 +1509,11 @@ function Read-DestinationPath {
         [hashtable]$SourceInfo
     )
 
-    $sourceLabel = if ($Mode -eq "LINK") { "Original/link" } else { "Source" }
+    $sourceLabel = switch ($Mode) {
+        "LINK" { "Original/link" }
+        "SYMONLY" { "Path 1" }
+        default { "Source" }
+    }
     Set-Breadcrumb @(
         (New-BreadcrumbStep "Mode" (Get-ModeDisplayName $Mode) $script:UiColor.Accent),
         (New-BreadcrumbStep $sourceLabel $SourceInfo.Path $script:UiColor.Path)
@@ -1498,7 +1522,12 @@ function Read-DestinationPath {
     while ($true) {
         Show-Header
 
-        if ($Mode -eq "LINK") {
+        if ($Mode -eq "SYMONLY") {
+            Write-Line "Enter the second path. Order does not matter; nothing is ever moved." $script:UiColor.Text
+            Write-Hint "Exactly one of the two paths must be a real file/folder; the other is where the link is created."
+            Write-Hint "If both paths hold a real item, or neither does, RoboSy stops without changing anything."
+        }
+        elseif ($Mode -eq "LINK") {
             Write-Line "Enter the real target path." $script:UiColor.Text
             Write-Hint "If the original path exists and this target path is missing, the original item is moved here first."
             Write-Hint "If the original path is missing, this target path must already exist."
@@ -1519,7 +1548,8 @@ function Read-DestinationPath {
         }
 
         Write-Blank
-        $inputPath = Read-ConsoleText "Destination/target"
+        $destPrompt = if ($Mode -eq "SYMONLY") { "Path 2" } else { "Destination/target" }
+        $inputPath = Read-ConsoleText $destPrompt
         if (Test-ExitInput $inputPath) { return @{ Action = "EXIT" } }
         if (Test-BackInput $inputPath) { return @{ Action = "BACK" } }
 
@@ -1538,7 +1568,7 @@ function Read-DestinationPath {
             continue
         }
 
-        if ($Mode -ne "LINK") {
+        if ($Mode -ne "LINK" -and $Mode -ne "SYMONLY") {
             if ($destInfo.Exists -and $destInfo.Type -ne "Directory") {
                 Write-Blank
                 Write-Line "Destination must be a folder path, but this path is an existing file." $script:UiColor.Error
@@ -2804,7 +2834,10 @@ function Complete-MoveAndLinkJob {
         [bool]$Linked,
         [string]$SourcePath,
         [string]$TargetPath,
-        [datetime]$StartedAt
+        [datetime]$StartedAt,
+        [string]$CompletedMessage = "Move + symbolic link job completed.",
+        [string]$FailedMessage = "Symbolic link job did not complete.",
+        [string]$LogLabel = "Move+Link"
     )
 
     if ($Linked) {
@@ -2818,12 +2851,12 @@ function Complete-MoveAndLinkJob {
     Write-Blank
     Write-Rule $script:UiColor.Border
     if ($Linked) {
-        Write-Line "Move + symbolic link job completed." $script:UiColor.Success
-        Write-Log "INFO" ("Move+Link job completed.")
+        Write-Line $CompletedMessage $script:UiColor.Success
+        Write-Log "INFO" ("{0} job completed." -f $LogLabel)
     }
     else {
-        Write-Line "Symbolic link job did not complete." $script:UiColor.Error
-        Write-Log "ERROR" ("Move+Link job did not complete.")
+        Write-Line $FailedMessage $script:UiColor.Error
+        Write-Log "ERROR" ("{0} job did not complete." -f $LogLabel)
     }
     Write-TotalElapsedTime $StartedAt
     Write-Log "INFO" ("Elapsed: {0}" -f (Format-ElapsedTime ((Get-Date) - $StartedAt)))
@@ -3028,6 +3061,157 @@ function Invoke-MoveAndLinkJob {
     return (Complete-MoveAndLinkJob -Linked $linked -SourcePath $sourcePath -TargetPath $targetPath -StartedAt $startedAt)
 }
 
+# Symlink Only (option 5) decides direction from the two entered paths so the
+# user never has to get the order right. A "real item" is an existing path that
+# is NOT a reparse point - the thing a link can point at. Whichever side is the
+# real item becomes the target; the other side (missing, or an existing
+# replaceable link) becomes the link location. Both-real and neither-real are
+# refused because there is then no single unambiguous, non-destructive action.
+function Resolve-SymlinkOnlyDirection {
+    param(
+        [hashtable]$FirstInfo,
+        [hashtable]$SecondInfo
+    )
+
+    $firstReal = ($FirstInfo.Exists -and -not $FirstInfo.IsReparsePoint)
+    $secondReal = ($SecondInfo.Exists -and -not $SecondInfo.IsReparsePoint)
+
+    if ($firstReal -and $secondReal) {
+        return @{ Decision = "BothReal" }
+    }
+
+    if (-not $firstReal -and -not $secondReal) {
+        return @{ Decision = "NeitherReal" }
+    }
+
+    if ($firstReal) {
+        return @{ Decision = "OK"; TargetInfo = $FirstInfo; LinkInfo = $SecondInfo }
+    }
+
+    return @{ Decision = "OK"; TargetInfo = $SecondInfo; LinkInfo = $FirstInfo }
+}
+
+function Invoke-SymlinkOnlyJob {
+    param(
+        [hashtable]$FirstInfo,
+        [hashtable]$SecondInfo
+    )
+
+    $startedAt = Get-Date
+
+    Set-Breadcrumb @(
+        (New-BreadcrumbStep "Mode" (Get-ModeDisplayName "SYMONLY") $script:UiColor.Accent),
+        (New-BreadcrumbStep "Path 1" $FirstInfo.Path $script:UiColor.Path),
+        (New-BreadcrumbStep "Path 2" $SecondInfo.Path $script:UiColor.Path)
+    )
+    Show-Header
+    Write-Line "Review the symbolic-link-only job below before it runs." $script:UiColor.Accent
+    Write-Blank
+
+    $firstStatus = Get-PathStatus $FirstInfo.Path
+    $secondStatus = Get-PathStatus $SecondInfo.Path
+    Write-PathStatusLog "Symlink-only path 1 check" $firstStatus
+    Write-PathStatusLog "Symlink-only path 2 check" $secondStatus
+
+    $direction = Resolve-SymlinkOnlyDirection -FirstInfo $firstStatus -SecondInfo $secondStatus
+    Write-Log "INFO" ("Symlink-only start: path1={0}, path2={1}, decision={2}" -f $FirstInfo.Path, $SecondInfo.Path, $direction.Decision)
+
+    if ($direction.Decision -eq "BothReal") {
+        Write-Line "Both paths already contain a real file or folder." $script:UiColor.Error
+        Write-Line "Symlink Only never overwrites a real item. Remove or move one side first, then run this again." $script:UiColor.Muted
+        Write-Log "ERROR" ("Symlink-only stopped: both paths are real items. path1=({0}); path2=({1})" -f (Format-PathStatusForLog $firstStatus), (Format-PathStatusForLog $secondStatus))
+        Write-Blank
+        return (Read-ReturnToMenu)
+    }
+
+    if ($direction.Decision -eq "NeitherReal") {
+        Write-Line "Neither path points to a real file or folder to link to." $script:UiColor.Error
+        Write-Line "One side must be an existing real item; the other side is where the link is created." $script:UiColor.Muted
+        Write-Log "ERROR" ("Symlink-only stopped: neither path is a real item. path1=({0}); path2=({1})" -f (Format-PathStatusForLog $firstStatus), (Format-PathStatusForLog $secondStatus))
+        Write-Blank
+        return (Read-ReturnToMenu)
+    }
+
+    $targetStatus = $direction.TargetInfo
+    $linkStatus = $direction.LinkInfo
+    $targetPath = $targetStatus.Path
+    $linkPath = $linkStatus.Path
+
+    if ([string]::Equals((Normalize-PathForCompare $targetPath), (Normalize-PathForCompare $linkPath), [StringComparison]::OrdinalIgnoreCase)) {
+        Write-Line "The two paths resolve to the same location, so no link can be created." $script:UiColor.Error
+        Write-Log "ERROR" ("Symlink-only stopped: both paths resolve to the same location: {0}" -f $targetPath)
+        Write-Blank
+        return (Read-ReturnToMenu)
+    }
+
+    $linkIsReplaceable = Test-IsReplaceableLinkStatus $linkStatus
+    if ($linkStatus.Exists -and -not $linkIsReplaceable) {
+        Write-Line "The link side already exists and is not a symbolic link or junction, so it will not be replaced." $script:UiColor.Error
+        Write-Line ("  {0}" -f $linkPath) $script:UiColor.Path
+        Write-Log "ERROR" ("Symlink-only stopped: link side exists and is not replaceable: {0}" -f (Format-PathStatusForLog $linkStatus))
+        Write-Blank
+        return (Read-ReturnToMenu)
+    }
+
+    $capability = Test-LinkCreationCapability -LinkParent (Split-Path -Parent $linkPath) -ItemType $targetStatus.Type
+    if (-not $capability.CanCreate) {
+        Write-Line "This session cannot create the required link at the link path." $script:UiColor.Error
+        if (-not [string]::IsNullOrWhiteSpace($capability.Message)) {
+            Write-Line $capability.Message $script:UiColor.Muted
+        }
+
+        if (-not (Test-RunningAsAdministrator)) {
+            $null = Invoke-AdminSwitch "Relaunching RoboSy as Administrator so it can create the required link..."
+        }
+
+        Write-Line "Run as Administrator, enable Windows Developer Mode, or point the link at a directory where junction fallback is available." $script:UiColor.Warning
+        Write-Blank
+        return (Read-ReturnToMenu)
+    }
+
+    if ($capability.LinkKind -eq "Junction") {
+        Write-Hint "Directory symbolic links are not available in this session; the script will use a junction fallback."
+    }
+
+    Write-Hint ("Real item detected at: {0}" -f $targetPath)
+    if ($linkIsReplaceable) {
+        Write-Hint ("The existing {0} at the other path is replaced with a new link only after you confirm; its target is never followed." -f $linkStatus.Kind)
+    }
+    else {
+        Write-Hint ("The symbolic link will be created at: {0}" -f $linkPath)
+    }
+    Write-Blank
+    Write-CommandPreview ('New-Item -ItemType SymbolicLink -Path {0} -Target {1}' -f (Format-PowerShellArgument $linkPath), (Format-PowerShellArgument $targetPath))
+
+    # Captured before the confirmation prompt and re-verified unchanged
+    # immediately after, so nothing is removed or trusted on a stale preview.
+    $linkSnapshot = Get-LinkReplacementSnapshot -LinkPath $linkPath -NewTargetPath $targetPath
+
+    $confirm = if ($linkIsReplaceable) {
+        Read-YesNo "Replace the existing link now" $false
+    }
+    else {
+        Read-YesNo "Create the symbolic link now" $false
+    }
+    if ($confirm -is [string] -and $confirm -eq "EXIT") { return "EXIT" }
+    if ($confirm -is [string] -and $confirm -eq "BACK") { return "BACK" }
+    if (-not $confirm) {
+        Write-Log "INFO" ("Symlink-only canceled by user before link creation: {0} -> {1}" -f $linkPath, $targetPath)
+        return "MENU"
+    }
+    Write-Blank
+
+    if (-not (Test-LinkReplacementSnapshotUnchanged -Snapshot $linkSnapshot)) {
+        Write-Line "The link path or the real target changed after the review, so nothing was created." $script:UiColor.Error
+        Write-Log "ERROR" ("Symlink-only aborted: state changed since preview. link={0}; target={1}" -f $linkPath, $targetPath)
+        Write-Blank
+        return (Read-ReturnToMenu)
+    }
+
+    $linked = Invoke-SafeLinkReplacement -Snapshot $linkSnapshot -PreviewShown
+    return (Complete-MoveAndLinkJob -Linked $linked -SourcePath $linkPath -TargetPath $targetPath -StartedAt $startedAt -CompletedMessage "Symlink-only job completed." -FailedMessage "Symlink-only job did not complete." -LogLabel "Symlink-only")
+}
+
 # Test hook: dot-sourcing this script with ROBOSY_LIB_ONLY=1 loads the helper
 # functions without starting the interactive menu. Used by tests\RoboSy.Tests.ps1.
 if ($env:ROBOSY_LIB_ONLY -eq "1") { return }
@@ -3083,6 +3267,9 @@ Write-Log "INFO" ("RoboSy session started. PSVersion={0}, PID={1}, Admin={2}" -f
 
             if ($mode -eq "LINK") {
                 $result = Invoke-MoveAndLinkJob -SourceInfo $sourceInfo -TargetInputInfo $destInfo
+            }
+            elseif ($mode -eq "SYMONLY") {
+                $result = Invoke-SymlinkOnlyJob -FirstInfo $sourceInfo -SecondInfo $destInfo
             }
             else {
                 $result = Invoke-RobocopyJob -Mode $mode -SourceInfo $sourceInfo -DestinationInfo $destInfo

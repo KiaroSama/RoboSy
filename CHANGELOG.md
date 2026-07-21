@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Added
+
+- Added a new main-menu option `5` **Symlink Only**, which creates a symbolic link without ever moving anything. The order of the two entered paths does not matter: whichever side holds a real file/folder becomes the link target, and the other (missing, or an existing replaceable link) becomes the link. RoboSy stops without changing anything if both paths hold real items or if neither does. The link is created with the same rollback-safe, capability-preflighted, snapshot-verified machinery as Move + Symlink, including the directory junction fallback and the marker file at the real target.
+- Added `tests/RoboSy.SymlinkOnly.Tests.ps1`, covering `Resolve-SymlinkOnlyDirection` direction detection (both orders, both-real, neither-real, reparse-point-as-link-side) and real interactive end-to-end scenarios for `Invoke-SymlinkOnlyJob`: create-only in both directions, the both-real/neither-real refusals, cancel, and the guarantee that the real item is never moved.
+
 ### Fixed
 
 - Fixed Move and Copy for folder sources so the selected folder is transferred as a folder and keeps its own name at the destination, instead of flattening its contents into the selected destination path. A destination that already ends with the source folder's name is reused instead of doubling the name (for example, no more `...\Docs\Docs`). Single-file Move and Copy are unaffected and keep the original file name.
