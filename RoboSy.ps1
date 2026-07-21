@@ -1419,9 +1419,9 @@ function Read-SourcePath {
                 Write-Hint "If this path does not exist, the script will create only the link after you enter an existing target."
             }
             "SYMONLY" {
-                Write-Line "Enter the first path. Order does not matter; nothing is ever moved." $script:UiColor.Text
-                Write-Hint "One of the two paths must be a real file/folder (the link target); the other is where the link is created."
-                Write-Hint "This path may be the real item or the missing side - RoboSy figures out the direction for you."
+                Write-Line "Enter the first path. Nothing is ever moved or deleted." $script:UiColor.Text
+                Write-Hint "If only one path is a real file/folder, order does not matter - the real side is the link target."
+                Write-Hint "If BOTH paths exist, Path 1 is the real source and the link is created inside Path 2 (which must be a folder)."
             }
             "DELETE" {
                 Write-Line "Enter the existing file or folder to permanently delete." $script:UiColor.Text
@@ -1438,7 +1438,7 @@ function Read-SourcePath {
 
         $prompt = switch ($Mode) {
             "DELETE" { "Delete path" }
-            "SYMONLY" { "Path 1" }
+            "SYMONLY" { "Path 1 (real source if both exist)" }
             default { "Source" }
         }
         $inputPath = Read-ConsoleText $prompt
@@ -1523,9 +1523,10 @@ function Read-DestinationPath {
         Show-Header
 
         if ($Mode -eq "SYMONLY") {
-            Write-Line "Enter the second path. Order does not matter; nothing is ever moved." $script:UiColor.Text
-            Write-Hint "Exactly one of the two paths must be a real file/folder; the other is where the link is created."
-            Write-Hint "If both paths hold a real item, or neither does, RoboSy stops without changing anything."
+            Write-Line "Enter the second path. Nothing is ever moved or deleted." $script:UiColor.Text
+            Write-Hint "If only Path 1 is real, this is where the link is created (order does not matter)."
+            Write-Hint "If both paths exist, the link is created INSIDE this folder as <Path 2>\<Path 1 name> -> Path 1."
+            Write-Hint "If neither path is a real file/folder, RoboSy stops without changing anything."
         }
         elseif ($Mode -eq "LINK") {
             Write-Line "Enter the real target path." $script:UiColor.Text
@@ -1548,7 +1549,7 @@ function Read-DestinationPath {
         }
 
         Write-Blank
-        $destPrompt = if ($Mode -eq "SYMONLY") { "Path 2" } else { "Destination/target" }
+        $destPrompt = if ($Mode -eq "SYMONLY") { "Path 2 (link location; a folder if both exist)" } else { "Destination/target" }
         $inputPath = Read-ConsoleText $destPrompt
         if (Test-ExitInput $inputPath) { return @{ Action = "EXIT" } }
         if (Test-BackInput $inputPath) { return @{ Action = "BACK" } }
@@ -3061,12 +3062,16 @@ function Invoke-MoveAndLinkJob {
     return (Complete-MoveAndLinkJob -Linked $linked -SourcePath $sourcePath -TargetPath $targetPath -StartedAt $startedAt)
 }
 
-# Symlink Only (option 5) decides direction from the two entered paths so the
-# user never has to get the order right. A "real item" is an existing path that
-# is NOT a reparse point - the thing a link can point at. Whichever side is the
-# real item becomes the target; the other side (missing, or an existing
-# replaceable link) becomes the link location. Both-real and neither-real are
-# refused because there is then no single unambiguous, non-destructive action.
+# Symlink Only (option 5) decides direction from the two entered paths. A "real
+# item" is an existing path that is NOT a reparse point - the thing a link can
+# point at.
+# - Exactly one side real  -> order does not matter: the real side is the target,
+#   the other side (missing, or an existing replaceable link) is the link.
+# - Both sides real         -> order DOES matter (user-fixed convention): Path 1
+#   is the real source, and the link is created INSIDE Path 2 as
+#   <Path 2>\<Path 1 name> -> Path 1. Nothing in Path 2 is moved or deleted. The
+#   caller enforces that Path 2 is a folder and computes the nested link path.
+# - Neither side real       -> refused; there is nothing to link to.
 function Resolve-SymlinkOnlyDirection {
     param(
         [hashtable]$FirstInfo,
@@ -3116,14 +3121,6 @@ function Invoke-SymlinkOnlyJob {
     $direction = Resolve-SymlinkOnlyDirection -FirstInfo $firstStatus -SecondInfo $secondStatus
     Write-Log "INFO" ("Symlink-only start: path1={0}, path2={1}, decision={2}" -f $FirstInfo.Path, $SecondInfo.Path, $direction.Decision)
 
-    if ($direction.Decision -eq "BothReal") {
-        Write-Line "Both paths already contain a real file or folder." $script:UiColor.Error
-        Write-Line "Symlink Only never overwrites a real item. Remove or move one side first, then run this again." $script:UiColor.Muted
-        Write-Log "ERROR" ("Symlink-only stopped: both paths are real items. path1=({0}); path2=({1})" -f (Format-PathStatusForLog $firstStatus), (Format-PathStatusForLog $secondStatus))
-        Write-Blank
-        return (Read-ReturnToMenu)
-    }
-
     if ($direction.Decision -eq "NeitherReal") {
         Write-Line "Neither path points to a real file or folder to link to." $script:UiColor.Error
         Write-Line "One side must be an existing real item; the other side is where the link is created." $script:UiColor.Muted
@@ -3132,23 +3129,64 @@ function Invoke-SymlinkOnlyJob {
         return (Read-ReturnToMenu)
     }
 
-    $targetStatus = $direction.TargetInfo
-    $linkStatus = $direction.LinkInfo
-    $targetPath = $targetStatus.Path
-    $linkPath = $linkStatus.Path
+    # Resolve the target (the real item the link points at) and the link path.
+    $nestedInContainer = $false
+    if ($direction.Decision -eq "BothReal") {
+        # User-fixed convention: Path 1 is the real source; the link goes INSIDE
+        # Path 2 as <Path 2>\<Path 1 name>. Nothing in Path 2 is moved or deleted.
+        if ($secondStatus.Type -ne "Directory") {
+            Write-Line "Both paths already exist, so the link must be created inside Path 2 - but Path 2 is a file, not a folder." $script:UiColor.Error
+            Write-Line ("  Path 2: {0}" -f $secondStatus.Path) $script:UiColor.Path
+            Write-Line "Enter a folder as Path 2, or remove one of the two real items first." $script:UiColor.Muted
+            Write-Log "ERROR" ("Symlink-only stopped: both real but Path 2 is not a folder. path1=({0}); path2=({1})" -f (Format-PathStatusForLog $firstStatus), (Format-PathStatusForLog $secondStatus))
+            Write-Blank
+            return (Read-ReturnToMenu)
+        }
+        $targetStatus = $firstStatus
+        $targetPath = $firstStatus.Path
+        $linkPath = Join-Path -Path $secondStatus.Path -ChildPath $firstStatus.Name
+        $nestedInContainer = $true
+    }
+    else {
+        $targetStatus = $direction.TargetInfo
+        $targetPath = $direction.TargetInfo.Path
+        $linkPath = $direction.LinkInfo.Path
+    }
+
+    # For the both-real case the link path is freshly computed inside Path 2, so
+    # read its real status now (it is usually missing, but could already be an
+    # item or a replaceable link).
+    $linkStatus = Get-PathStatus $linkPath
 
     if ([string]::Equals((Normalize-PathForCompare $targetPath), (Normalize-PathForCompare $linkPath), [StringComparison]::OrdinalIgnoreCase)) {
-        Write-Line "The two paths resolve to the same location, so no link can be created." $script:UiColor.Error
-        Write-Log "ERROR" ("Symlink-only stopped: both paths resolve to the same location: {0}" -f $targetPath)
+        Write-Line "The link and its target resolve to the same location, so no link can be created." $script:UiColor.Error
+        Write-Log "ERROR" ("Symlink-only stopped: link and target resolve to the same location: {0}" -f $targetPath)
+        Write-Blank
+        return (Read-ReturnToMenu)
+    }
+
+    # A link created inside its own target directory would point back up at a
+    # folder that contains it - a loop. Refuse it (more likely in the both-real
+    # nested case, e.g. Path 2 sitting inside Path 1).
+    if ($targetStatus.Type -eq "Directory" -and (Test-IsSameOrChildPath -Parent $targetPath -Child $linkPath)) {
+        Write-Line "The link would be created inside its own target folder, which forms a loop." $script:UiColor.Error
+        Write-Line ("  Target: {0}" -f $targetPath) $script:UiColor.Path
+        Write-Line ("  Link:   {0}" -f $linkPath) $script:UiColor.Path
+        Write-Log "ERROR" ("Symlink-only stopped: link inside its own target (loop). target={0}; link={1}" -f $targetPath, $linkPath)
         Write-Blank
         return (Read-ReturnToMenu)
     }
 
     $linkIsReplaceable = Test-IsReplaceableLinkStatus $linkStatus
     if ($linkStatus.Exists -and -not $linkIsReplaceable) {
-        Write-Line "The link side already exists and is not a symbolic link or junction, so it will not be replaced." $script:UiColor.Error
+        if ($nestedInContainer) {
+            Write-Line ("Path 2 already contains a real item named '{0}', so the link will not overwrite it." -f $firstStatus.Name) $script:UiColor.Error
+        }
+        else {
+            Write-Line "The link side already exists and is not a symbolic link or junction, so it will not be replaced." $script:UiColor.Error
+        }
         Write-Line ("  {0}" -f $linkPath) $script:UiColor.Path
-        Write-Log "ERROR" ("Symlink-only stopped: link side exists and is not replaceable: {0}" -f (Format-PathStatusForLog $linkStatus))
+        Write-Log "ERROR" ("Symlink-only stopped: link path exists and is not replaceable: {0}" -f (Format-PathStatusForLog $linkStatus))
         Write-Blank
         return (Read-ReturnToMenu)
     }
@@ -3173,8 +3211,13 @@ function Invoke-SymlinkOnlyJob {
         Write-Hint "Directory symbolic links are not available in this session; the script will use a junction fallback."
     }
 
-    Write-Hint ("Real item detected at: {0}" -f $targetPath)
-    if ($linkIsReplaceable) {
+    # Spell out exactly what will happen before the final confirmation.
+    Write-Hint ("Real source (link target): {0}" -f $targetPath)
+    if ($nestedInContainer) {
+        Write-Hint "Both paths exist, so the link is created INSIDE Path 2. Nothing in Path 2 is moved or deleted."
+        Write-Hint ("New link: {0}  ->  {1}" -f $linkPath, $targetPath)
+    }
+    elseif ($linkIsReplaceable) {
         Write-Hint ("The existing {0} at the other path is replaced with a new link only after you confirm; its target is never followed." -f $linkStatus.Kind)
     }
     else {

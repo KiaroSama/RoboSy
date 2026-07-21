@@ -171,22 +171,17 @@ Behavior:
 
 ### Symlink Only
 
-Option `5` creates a symbolic link only and never moves anything. It asks for two paths, and the order does not matter:
+Option `5` creates a symbolic link only and never moves or deletes anything. It asks for two paths:
 
-1. **Path 1**
-2. **Path 2**
-
-RoboSy inspects both paths and works out the direction for you, so you do not have to remember which one is the source and which is the destination:
-
-- Whichever path is a real, existing file or folder (not itself a link) becomes the link **target**.
-- The other path — the one that is missing, or is already a symbolic link or junction — becomes the **link** location.
+1. **Path 1** (the real source, if both paths exist)
+2. **Path 2** (the link location; a folder, if both paths exist)
 
 Behavior:
 
-- If one path holds a real file/folder and the other is missing, RoboSy creates the link at the missing path, pointing to the real item. Nothing is moved.
+- **Only one path is a real file/folder — order does not matter.** Whichever path is a real, existing file or folder (not itself a link) becomes the link **target**; the other path — the one that is missing, or is already a symbolic link or junction — becomes the **link** location. RoboSy creates the link at the missing/link side, pointing to the real item. Nothing is moved.
+- **Both paths already exist — order matters.** Path 1 is treated as the real source, and the link is created **inside** Path 2 as `<Path 2>\<Path 1 name>`, pointing to Path 1. Nothing inside Path 2 is moved or deleted. Path 2 must be a folder (a file is rejected), and if Path 2 already contains a real item with Path 1's name, RoboSy stops rather than overwriting it. The exact link that will be created is shown before you confirm.
+- **Neither path is a real file/folder — RoboSy stops,** because there is nothing to link to.
 - If the link side is already a symbolic link or junction, RoboSy replaces it with the same rollback-safe transaction used by Move + Symlink: the old link is removed only immediately before the new link is created, its target is never followed, and a failed replacement restores the original link and reports failure.
-- If **both** paths already hold a real file or folder, RoboSy stops without changing anything (it never overwrites a real item).
-- If **neither** path holds a real file or folder, RoboSy stops, because there is nothing to link to.
 - If directory symlinks are unavailable, RoboSy tries a junction fallback, exactly like Move + Symlink.
 
 ## Marker File

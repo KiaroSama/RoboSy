@@ -39,9 +39,11 @@ try {
     Assert-PathEqual "direction is order-independent: target is still the real item" $realDir $dirB.TargetInfo.Path
     Assert-PathEqual "direction is order-independent: link is still the missing side" $missingStatus.Path $dirB.LinkInfo.Path
 
+    # Both real is a HANDLED case now (link nested inside Path 2), not a refusal;
+    # the resolver just classifies it as BothReal and the job does the rest.
     $secondReal = New-TestDirectory (Join-Path $dirRoot "SecondReal")
     $bothReal = Resolve-SymlinkOnlyDirection -FirstInfo $realStatus -SecondInfo (Get-PathStatus $secondReal)
-    Assert-True "two real items are refused as BothReal" ($bothReal.Decision -eq "BothReal")
+    Assert-True "two real items classify as BothReal" ($bothReal.Decision -eq "BothReal")
 
     $secondMissing = Get-PathStatus (Join-Path $dirRoot "AlsoMissing")
     $neither = Resolve-SymlinkOnlyDirection -FirstInfo $missingStatus -SecondInfo $secondMissing
@@ -88,20 +90,6 @@ try {
     # -----------------------------------------------------------------
     Write-Section "Interactive end-to-end: refusals never change anything"
 
-    # Both real -> refused.
-    $bothRoot = New-TestDirectory (Join-Path $sandbox "E2E-BothReal")
-    $bothA = New-TestDirectory (Join-Path $bothRoot "A")
-    New-TestFile (Join-Path $bothA "a.txt") -Content "a" | Out-Null
-    $bothB = New-TestDirectory (Join-Path $bothRoot "B")
-    New-TestFile (Join-Path $bothB "b.txt") -Content "b" | Out-Null
-
-    $bothResult = Invoke-RoboSyInteractive -SandboxRoot $bothRoot -InputLines @("5", $bothA, $bothB, "exit")
-    Assert-True "both-real is refused with a clear message" ($bothResult.Output -match "Both paths already contain a real")
-    Assert-True "both-real leaves path A untouched" (Test-Path -LiteralPath (Join-Path $bothA "a.txt"))
-    Assert-True "both-real leaves path B untouched" (Test-Path -LiteralPath (Join-Path $bothB "b.txt"))
-    Assert-True "both-real created no link at either side" `
-        ((-not (Get-PathStatus $bothA).IsReparsePoint) -and (-not (Get-PathStatus $bothB).IsReparsePoint))
-
     # Neither real -> refused.
     $neitherRoot = New-TestDirectory (Join-Path $sandbox "E2E-Neither")
     $neitherA = Join-Path $neitherRoot "MissingA"
@@ -111,10 +99,68 @@ try {
     Assert-True "neither-real created nothing at path A" (-not (Test-Path -LiteralPath $neitherA))
     Assert-True "neither-real created nothing at path B" (-not (Test-Path -LiteralPath $neitherB))
 
+    # Both real but Path 2 is a FILE -> refused (a link cannot be created inside a file).
+    $bfRoot = New-TestDirectory (Join-Path $sandbox "E2E-BothFile")
+    $bfSource = New-TestDirectory (Join-Path $bfRoot "RealFolder")
+    New-TestFile (Join-Path $bfSource "s.txt") -Content "s" | Out-Null
+    $bfFile = New-TestFile (Join-Path $bfRoot "Path2File.txt") -Content "path2-file"
+    $bfResult = Invoke-RoboSyInteractive -SandboxRoot $bfRoot -InputLines @("5", $bfSource, $bfFile, "exit")
+    Assert-True "both-real with a file Path 2 is refused" ($bfResult.Output -match "Path 2 is a file, not a folder")
+    Assert-True "both-real-file leaves the Path 2 file untouched" `
+        (((Get-Content -LiteralPath $bfFile -Raw).Trim()) -eq "path2-file")
+    Assert-True "both-real-file leaves the source untouched" (Test-Path -LiteralPath (Join-Path $bfSource "s.txt"))
+
     if (-not $junctionAvailable) {
         Skip-Test "all link-creating symlink-only scenarios" "this session cannot create a junction"
         Write-TestSummaryAndExit
     }
+
+    # -----------------------------------------------------------------
+    Write-Section "Interactive end-to-end: both paths exist -> link nested inside Path 2, nothing deleted"
+
+    # Path 1 is the real source; Path 2 is a folder. The link is created as
+    # <Path 2>\<Path 1 name> -> Path 1, and NOTHING in Path 2 is deleted.
+    $bothRoot = New-TestDirectory (Join-Path $sandbox "E2E-BothReal")
+    $bothSource = New-TestDirectory (Join-Path $bothRoot "Movie")
+    New-TestFile (Join-Path $bothSource "movie.txt") -Content "movie-payload" | Out-Null
+    $bothContainer = New-TestDirectory (Join-Path $bothRoot "Links")
+    New-TestFile (Join-Path $bothContainer "existing.txt") -Content "keep-me" | Out-Null
+    $nestedLink = Join-Path $bothContainer "Movie"
+
+    $bothResult = Invoke-RoboSyInteractive -SandboxRoot $bothRoot -InputLines @("5", $bothSource, $bothContainer, "y", "exit")
+    Assert-True "both-real exits cleanly" ($bothResult.ExitCode -eq 0) ("exit code {0}" -f $bothResult.ExitCode)
+    Assert-True "both-real reports completion" ($bothResult.Output -match "Symlink-only job completed")
+    Assert-True "both-real created the link INSIDE Path 2 as <Path2>\<Path1 name>" ((Get-PathStatus $nestedLink).IsReparsePoint)
+    Assert-True "both-real nested link resolves into Path 1" (Test-Path -LiteralPath (Join-Path $nestedLink "movie.txt"))
+    Assert-True "both-real left Path 1 (the real source) untouched, not moved" (Test-Path -LiteralPath (Join-Path $bothSource "movie.txt"))
+    Assert-True "both-real deleted nothing already inside Path 2" (Test-Path -LiteralPath (Join-Path $bothContainer "existing.txt"))
+    Assert-True "both-real Path 1 is still a real folder, not itself a link" (-not (Get-PathStatus $bothSource).IsReparsePoint)
+
+    # Order matters when both exist: swapping the two paths swaps source/container.
+    $ordRoot = New-TestDirectory (Join-Path $sandbox "E2E-Order")
+    $ordA = New-TestDirectory (Join-Path $ordRoot "Alpha")
+    New-TestFile (Join-Path $ordA "a.txt") -Content "alpha" | Out-Null
+    $ordB = New-TestDirectory (Join-Path $ordRoot "Beta")
+    New-TestFile (Join-Path $ordB "b.txt") -Content "beta" | Out-Null
+
+    $ordResult = Invoke-RoboSyInteractive -SandboxRoot $ordRoot -InputLines @("5", $ordB, $ordA, "y", "exit")
+    Assert-True "order matters: reversed run exits cleanly" ($ordResult.ExitCode -eq 0) ("exit code {0}" -f $ordResult.ExitCode)
+    Assert-True "order matters: (Beta, Alpha) creates Alpha\Beta -> Beta" ((Get-PathStatus (Join-Path $ordA "Beta")).IsReparsePoint)
+    Assert-True "order matters: the reversed link resolves into Beta" (Test-Path -LiteralPath (Join-Path (Join-Path $ordA "Beta") "b.txt"))
+    Assert-True "order matters: no link was created the other way (Beta\Alpha)" (-not (Test-Path -LiteralPath (Join-Path $ordB "Alpha")))
+
+    # Both real, but Path 2 already contains a real item with Path 1's name -> refused (no overwrite).
+    $colRoot = New-TestDirectory (Join-Path $sandbox "E2E-Collide")
+    $colSource = New-TestDirectory (Join-Path $colRoot "Data")
+    New-TestFile (Join-Path $colSource "d.txt") -Content "data" | Out-Null
+    $colContainer = New-TestDirectory (Join-Path $colRoot "Box")
+    $colOccupant = New-TestDirectory (Join-Path $colContainer "Data")
+    New-TestFile (Join-Path $colOccupant "occupant.txt") -Content "occupant" | Out-Null
+
+    $colResult = Invoke-RoboSyInteractive -SandboxRoot $colRoot -InputLines @("5", $colSource, $colContainer, "exit")
+    Assert-True "collision inside Path 2 is refused" ($colResult.Output -match "already contains a real item named")
+    Assert-True "collision left the occupant untouched" (Test-Path -LiteralPath (Join-Path $colOccupant "occupant.txt"))
+    Assert-True "collision occupant is still a real folder, not replaced by a link" (-not (Get-PathStatus $colOccupant).IsReparsePoint)
 
     # -----------------------------------------------------------------
     Write-Section "Interactive end-to-end: create-only, both directions, never moves"
