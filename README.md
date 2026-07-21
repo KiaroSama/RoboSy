@@ -237,6 +237,7 @@ Runtime logs are ignored by Git and should not be published.
 | `tests/RoboSy.Classification.Tests.ps1` | Regression tests for final-path classification, type conflicts, reparse-point hardening, and execution-time revalidation. |
 | `tests/RoboSy.Input.Tests.ps1` | Regression tests for `Read-ConsoleText`'s redirected/non-redirected input paths and the `Read-HostUiLine` fallback chain. |
 | `tests/RoboSy.SymlinkOnly.Tests.ps1` | Regression tests for Symlink Only direction detection and its create-only, never-move end-to-end behavior. |
+| `tests/Invoke-RoboSyTests.ps1` | Bounded parallel test runner (runs every `*.Tests.ps1` concurrently as isolated child processes); used locally and in CI. |
 | `RoboSy.cmd` | Normal launcher. |
 | `RoboSy Admin.cmd` | Administrator launcher. |
 | `Install-RoboSyPath.ps1` | Adds RoboSy to the user `PATH` and installs the command shim. |
@@ -285,14 +286,18 @@ Invoke-ScriptAnalyzer -Path . -Recurse -Settings .\PSScriptAnalyzerSettings.psd1
 
 A clean run reports no issues.
 
-Run the regression tests locally with either PowerShell version:
+Run the regression tests locally with the parallel runner (this is what CI uses). It runs every `tests/*.Tests.ps1` file concurrently as isolated child processes, with a bounded worker ceiling and per-file/whole-run timeouts:
 
 ```powershell
-Get-ChildItem .\tests -Filter *.Tests.ps1 | ForEach-Object { powershell.exe -NoProfile -ExecutionPolicy Bypass -File $_.FullName }
-Get-ChildItem .\tests -Filter *.Tests.ps1 | ForEach-Object { pwsh -NoProfile -File $_.FullName }
+# Windows PowerShell 5.1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Invoke-RoboSyTests.ps1 -TestHost powershell.exe
+# PowerShell 7+
+pwsh -NoProfile -File .\tests\Invoke-RoboSyTests.ps1 -TestHost pwsh
 ```
 
-Each test file prints its own passed/failed/skipped counts and exits non-zero on any failure. Tests run entirely inside disposable temporary directories and clean up after themselves; the interactive end-to-end scenarios in `RoboSy.LinkSafety.Tests.ps1` and `RoboSy.Classification.Tests.ps1` drive a disposable copy of `RoboSy.ps1` through piped input, so its own log directory never touches the real repository. `RoboSy.Input.Tests.ps1` covers `Read-ConsoleText`'s redirected and non-redirected input paths, including the `Read-HostUiLine` host-line-reader fallback chain, using injected fakes rather than a real keyboard.
+The runner prints each file's passed/failed/skipped counts and total wall time, and exits non-zero on any failure, timeout, or if zero test files are discovered. The worker count defaults to `max(2, cores-2)` (clamped to the number of test files, max 8) and can be capped with `-MaxWorkers N` or the `HOOKMAKER_MAX_TEST_WORKERS` / `ROBOSY_MAX_TEST_WORKERS` environment variable. Only the files run in parallel — each file stays internally sequential, and every file uses its own unique temporary sandbox, so they share no state. You can still run a single file directly (for example `pwsh -NoProfile -File .\tests\RoboSy.Input.Tests.ps1`) when debugging one suite.
+
+Tests run entirely inside disposable temporary directories and clean up after themselves; the interactive end-to-end scenarios in `RoboSy.LinkSafety.Tests.ps1`, `RoboSy.Classification.Tests.ps1`, and `RoboSy.SymlinkOnly.Tests.ps1` drive a disposable copy of `RoboSy.ps1` through piped input, so its own log directory never touches the real repository. `RoboSy.Input.Tests.ps1` covers `Read-ConsoleText`'s redirected and non-redirected input paths, including the `Read-HostUiLine` host-line-reader fallback chain, using injected fakes rather than a real keyboard.
 
 ### Manual terminal smoke test
 

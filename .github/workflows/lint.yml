@@ -25,6 +25,7 @@ jobs:
   analyze:
     name: PSScriptAnalyzer
     runs-on: windows-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -63,44 +64,20 @@ jobs:
           }
           Write-Host "PSScriptAnalyzer found no issues."
 
+      # The parallel runner discovers every tests/*.Tests.ps1 file, runs them
+      # concurrently as isolated child processes with a bounded worker ceiling
+      # (auto: max(2, cores-2), clamped), enforces per-file and whole-run wall
+      # timeouts, terminates process trees on timeout, propagates a non-zero exit
+      # on any failure, and fails closed on zero discovered files. Each test file
+      # still runs internally sequentially; only the files run in parallel.
       - name: Regression tests (Windows PowerShell 5.1)
         shell: powershell
         run: |
-          $testFiles = @(Get-ChildItem -Path .\tests -Filter *.Tests.ps1 -File)
-          if ($testFiles.Count -eq 0) {
-            throw "No regression test files were found."
-          }
-          Write-Host ("Discovered {0} regression test file(s):" -f $testFiles.Count) -ForegroundColor Cyan
-          $testFiles | ForEach-Object { Write-Host ("  - {0}" -f $_.Name) -ForegroundColor Cyan }
-
-          $failed = $false
-          foreach ($testFile in $testFiles) {
-            Write-Host "== $($testFile.Name) (Windows PowerShell 5.1) ==" -ForegroundColor Cyan
-            powershell.exe -NoProfile -ExecutionPolicy Bypass -File $testFile.FullName
-            if ($LASTEXITCODE -ne 0) {
-              $failed = $true
-              Write-Host "$($testFile.Name) failed under Windows PowerShell 5.1 (exit code $LASTEXITCODE)." -ForegroundColor Red
-            }
-          }
-          if ($failed) { throw "One or more regression test files failed under Windows PowerShell 5.1." }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Invoke-RoboSyTests.ps1 -TestHost powershell.exe
+          if ($LASTEXITCODE -ne 0) { throw "Regression tests failed under Windows PowerShell 5.1 (exit code $LASTEXITCODE)." }
 
       - name: Regression tests (PowerShell 7+)
         shell: pwsh
         run: |
-          $testFiles = @(Get-ChildItem -Path .\tests -Filter *.Tests.ps1 -File)
-          if ($testFiles.Count -eq 0) {
-            throw "No regression test files were found."
-          }
-          Write-Host ("Discovered {0} regression test file(s):" -f $testFiles.Count) -ForegroundColor Cyan
-          $testFiles | ForEach-Object { Write-Host ("  - {0}" -f $_.Name) -ForegroundColor Cyan }
-
-          $failed = $false
-          foreach ($testFile in $testFiles) {
-            Write-Host "== $($testFile.Name) (PowerShell 7+) ==" -ForegroundColor Cyan
-            pwsh -NoProfile -File $testFile.FullName
-            if ($LASTEXITCODE -ne 0) {
-              $failed = $true
-              Write-Host "$($testFile.Name) failed under PowerShell 7+ (exit code $LASTEXITCODE)." -ForegroundColor Red
-            }
-          }
-          if ($failed) { throw "One or more regression test files failed under PowerShell 7+." }
+          & pwsh -NoProfile -File .\tests\Invoke-RoboSyTests.ps1 -TestHost pwsh
+          if ($LASTEXITCODE -ne 0) { throw "Regression tests failed under PowerShell 7+ (exit code $LASTEXITCODE)." }
