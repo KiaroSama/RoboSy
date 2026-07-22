@@ -3049,7 +3049,8 @@ function Invoke-MoveAndLinkJob {
         $linkSnapshot = Get-LinkReplacementSnapshot -LinkPath $sourcePath -NewTargetPath $targetPath
 
         if ($sourceIsReplaceableLink) {
-            Write-Line ("WARNING: {0} is already a {1}." -f $sourcePath, $sourceStatus.Kind) $script:UiColor.Warning
+            Write-Blank
+            Write-Line ("WARNING: {0} is already a {1}." -f $sourcePath, $sourceStatus.Kind) DarkRed
             Write-Line ("  It currently points to: {0}" -f $sourceStatus.LinkTarget) $script:UiColor.Path
             Write-Line ("  It will be REPOINTED to: {0}" -f $targetPath) $script:UiColor.Warning
             Write-Hint "Only the link is changed; the old target itself is never deleted or followed."
@@ -3254,7 +3255,8 @@ function Invoke-SymlinkOnlyJob {
     elseif ($linkIsReplaceable) {
         # Make it unmistakable that an existing link is being repointed and show
         # where it currently points, so its real target is never a surprise.
-        Write-Line ("WARNING: {0} is already a {1}." -f $linkPath, $linkStatus.Kind) $script:UiColor.Warning
+        Write-Blank
+        Write-Line ("WARNING: {0} is already a {1}." -f $linkPath, $linkStatus.Kind) DarkRed
         Write-Line ("  It currently points to: {0}" -f $linkStatus.LinkTarget) $script:UiColor.Path
         Write-Line ("  It will be REPOINTED to: {0}" -f $targetPath) $script:UiColor.Warning
         Write-Hint "Only the link is changed; the old target itself is never deleted or followed."
