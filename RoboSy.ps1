@@ -206,6 +206,9 @@ $script:PromptNavQuitAnsiColor = ("{0}[38;5;32m" -f [char]27)
 $script:HintAnsiColor = ("{0}[38;5;221m" -f [char]27)
 # Light sky-blue used for command previews.
 $script:CommandAnsiColor = ("{0}[38;2;135;206;235m" -f [char]27)
+# Medium-bright red (ANSI 256-color 160) for the link-repoint warning header -
+# brighter than ConsoleColor.DarkRed but less intense than plain Red/Error.
+$script:LinkWarningAnsiColor = ("{0}[38;5;160m" -f [char]27)
 
 function Initialize-LogPath {
     if ($script:LogInitialized) { return }
@@ -278,10 +281,18 @@ function Write-Log {
 function Write-Line {
     param(
         [AllowNull()][string]$Text = "",
-        [ConsoleColor]$Color = [ConsoleColor]::Gray
+        [ConsoleColor]$Color = [ConsoleColor]::Gray,
+        [string]$AnsiColor = ""
     )
 
     if ($null -eq $Text) { $Text = "" }
+
+    if (-not [string]::IsNullOrWhiteSpace($AnsiColor) -and (Test-AnsiOutputAvailable)) {
+        $reset = "{0}[0m" -f [char]27
+        Write-Host ("{0}{1}{2}" -f $AnsiColor, $Text, $reset)
+        return
+    }
+
     Write-Host $Text -ForegroundColor $Color
 }
 
@@ -3050,7 +3061,8 @@ function Invoke-MoveAndLinkJob {
 
         if ($sourceIsReplaceableLink) {
             Write-Blank
-            Write-Line ("WARNING: {0} is already a {1}." -f $sourcePath, $sourceStatus.Kind) DarkRed
+            Write-Line ("WARNING: {0} is already a {1}." -f $sourcePath, $sourceStatus.Kind) Red $script:LinkWarningAnsiColor
+            Write-Blank
             Write-Line ("  It currently points to: {0}" -f $sourceStatus.LinkTarget) $script:UiColor.Path
             Write-Line ("  It will be REPOINTED to: {0}" -f $targetPath) $script:UiColor.Warning
             Write-Hint "Only the link is changed; the old target itself is never deleted or followed."
@@ -3256,7 +3268,8 @@ function Invoke-SymlinkOnlyJob {
         # Make it unmistakable that an existing link is being repointed and show
         # where it currently points, so its real target is never a surprise.
         Write-Blank
-        Write-Line ("WARNING: {0} is already a {1}." -f $linkPath, $linkStatus.Kind) DarkRed
+        Write-Line ("WARNING: {0} is already a {1}." -f $linkPath, $linkStatus.Kind) Red $script:LinkWarningAnsiColor
+        Write-Blank
         Write-Line ("  It currently points to: {0}" -f $linkStatus.LinkTarget) $script:UiColor.Path
         Write-Line ("  It will be REPOINTED to: {0}" -f $targetPath) $script:UiColor.Warning
         Write-Hint "Only the link is changed; the old target itself is never deleted or followed."
