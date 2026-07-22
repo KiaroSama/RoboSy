@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Changed
+
+- **Split `RoboSy.ps1` into an entry point plus 9 `lib/*.ps1` modules by responsibility** (`Elevation`, `Logging`, `Console-UI`, `Input`, `Path-Helpers`, `Robocopy-Core`, `Standard-Jobs`, `Link-Management`, `Menu-Prompts`). RoboSy is still distributed and run the same way — `RoboSy.cmd`, `RoboSy Admin.cmd`, and `Install-RoboSyPath.ps1` are unaffected since they already resolve paths relative to their own location — but the project is now a single *folder* rather than a single *file*. The split was done mechanically (line-range extraction, not retyping) and verified with a full line-for-line diff against the pre-split script; no behavior changed. See the README's Repository Files table for what lives where.
+- Simplified `Write-HeaderAccentLine`, `Write-LogPathLine`, `Write-Hint`, and `Write-CommandPreview` to thin wrappers around `Write-Line`'s ANSI-color parameter, removing ~35 lines of duplicated ANSI-vs-ConsoleColor branching that predated `Write-Line` gaining that capability.
+
 ### Fixed
 
 - Fixed the symbolic-link marker file (`Symlink path_<target>.txt`) so it accumulates every link that points at a target instead of overwriting. A target can be linked from several places; each new link is now appended on its own line (de-duplicated, case-insensitive) rather than erasing the previous entries.

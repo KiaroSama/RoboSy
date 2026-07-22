@@ -1,7 +1,7 @@
 @{
     # PSScriptAnalyzer settings for RoboSy.
-    # RoboSy is an interactive, single-file console application, so a few default
-    # rules are intentionally excluded to match the established project style.
+    # RoboSy is an interactive console application (RoboSy.ps1 + lib/*.ps1), so a few
+    # default rules are intentionally excluded to match the established project style.
     Severity = @('Error', 'Warning')
 
     ExcludeRules = @(

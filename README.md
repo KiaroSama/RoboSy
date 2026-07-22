@@ -226,7 +226,16 @@ Runtime logs are ignored by Git and should not be published.
 
 | File | Purpose |
 | --- | --- |
-| `RoboSy.ps1` | Main interactive PowerShell script. |
+| `RoboSy.ps1` | Entry point: dot-sources every `lib/*.ps1` module, handles elevation/relaunch, then runs the interactive main menu loop. |
+| `lib/Elevation.ps1` | Administrator relaunch: Windows Terminal/pwsh discovery, argument building, and `Invoke-AdminSwitch`. |
+| `lib/Logging.ps1` | Daily log file initialization and `Write-Log`. |
+| `lib/Console-UI.ps1` | Console colors/state, ANSI-aware line writers, prompts, breadcrumbs, and the session header. |
+| `lib/Input.ps1` | Navigation-keyword checks and the redirected/non-redirected console input pipeline (`Read-ConsoleText`, `Read-HostUiLine`, `Read-YesNo`). |
+| `lib/Path-Helpers.ps1` | Path normalization/comparison, link metadata, path status, and the protected-root guard. |
+| `lib/Robocopy-Core.ps1` | Native `robocopy`/`cmd.exe` command wrappers and exit-code descriptions. |
+| `lib/Standard-Jobs.ps1` | Move/Copy destination resolution, final-path classification, `Invoke-RobocopyJob`, and Fast Delete. |
+| `lib/Link-Management.ps1` | Rollback-safe symbolic link/junction creation and replacement, shared by Move + Symlink and Symlink Only. |
+| `lib/Menu-Prompts.ps1` | Main menu choice and the source/destination path prompts. |
 | `tests/TestHelpers.ps1` | Shared test assertions, sandbox helpers, and the interactive end-to-end test harness. |
 | `tests/RoboSy.Tests.ps1` | Regression tests for destination resolution and native-command wrappers. |
 | `tests/RoboSy.LinkSafety.Tests.ps1` | Regression tests for the rollback-safe Move + Symlink replacement transaction. |

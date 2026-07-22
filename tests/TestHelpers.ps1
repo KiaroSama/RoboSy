@@ -117,9 +117,14 @@ function Write-TestSummaryAndExit {
 
 $script:RepoRoot = Split-Path -Parent $PSScriptRoot
 $script:RoboSyScriptPath = Join-Path -Path $script:RepoRoot -ChildPath "RoboSy.ps1"
+$script:RoboSyLibPath = Join-Path -Path $script:RepoRoot -ChildPath "lib"
 
 if (-not (Test-Path -LiteralPath $script:RoboSyScriptPath)) {
     throw "RoboSy.ps1 was not found next to the tests directory: $($script:RoboSyScriptPath)"
+}
+
+if (-not (Test-Path -LiteralPath $script:RoboSyLibPath)) {
+    throw "RoboSy.ps1's lib\ directory was not found next to the tests directory: $($script:RoboSyLibPath)"
 }
 
 $env:ROBOSY_LIB_ONLY = "1"
@@ -146,11 +151,21 @@ if ([string]::IsNullOrWhiteSpace($script:InteractiveExe)) {
 # stdin, so RoboSy's own Read-Host based input path handles it exactly like a
 # real terminal session that stays in control of every step. Returns the
 # combined console output and the process exit code.
+#
+# RoboSy.ps1 dot-sources its lib\ directory relative to its own location, so
+# the copy needs lib\ sitting next to it too. Copied once per sandbox (the
+# same $SandboxRoot is normally reused across many InputLines scenarios within
+# one test file), not once per call.
 function Invoke-RoboSyInteractive {
     param(
         [string]$SandboxRoot,
         [string[]]$InputLines
     )
+
+    $sandboxLib = Join-Path -Path $SandboxRoot -ChildPath "lib"
+    if (-not (Test-Path -LiteralPath $sandboxLib)) {
+        Copy-Item -LiteralPath $script:RoboSyLibPath -Destination $sandboxLib -Recurse -Force
+    }
 
     $scriptCopy = Join-Path -Path $SandboxRoot -ChildPath ("RoboSy-{0}.ps1" -f ([Guid]::NewGuid().ToString("N")))
     Copy-Item -LiteralPath $script:RoboSyScriptPath -Destination $scriptCopy -Force
