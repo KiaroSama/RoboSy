@@ -193,10 +193,11 @@ After a successful Move + Symlink or Symlink Only job, RoboSy writes a marker fi
 | Folder, for example `D:\example` | Inside `D:\example\` | `Symlink path_example.txt` |
 | File, for example `D:\folder\app.exe` | Next to the file | `Symlink path_app.exe.txt` |
 
-The marker file contains the original link path, such as:
+The marker file lists the link path(s) that point at this target, one per line. Because a single target can be linked from several places, each new link is **appended** on its own line rather than overwriting the previous entries, and the same link path is never added twice:
 
 ```text
 C:\example
+D:\another\link\to\example
 ```
 
 ## Logs

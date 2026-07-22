@@ -476,8 +476,8 @@ function Write-ConsolePrompt {
         Write-ColoredPromptSegment ", " "" $script:UiColor.Text
         Write-ColoredPromptSegment "Run as admin=admin" $script:PromptNavAdminAnsiColor Green
         Write-ColoredPromptSegment ", " "" $script:UiColor.Text
-        Write-ColoredPromptSegment "quit= exit" $script:PromptNavQuitAnsiColor Blue
-        Write-ColoredPromptSegment " }" "" $script:UiColor.Text
+        Write-ColoredPromptSegment "quit=exit" $script:PromptNavQuitAnsiColor Blue
+        Write-ColoredPromptSegment "}" "" $script:UiColor.Text
     }
 
     Write-ColoredPromptSegment ": " "" $script:UiColor.Text
@@ -493,7 +493,7 @@ function Format-ConsolePromptText {
         return $Prompt
     }
 
-    return ("{0} {{back=0, Run as admin=admin, quit= exit }}" -f $Prompt)
+    return ("{0} {{back=0, Run as admin=admin, quit=exit}}" -f $Prompt)
 }
 
 function Format-HeaderTitleLine {
@@ -1370,7 +1370,7 @@ function Read-MainChoice {
         Write-MenuOption "2" "Copy" "Copy a folder tree or a single file with robocopy." Green
         Write-MenuOption "3" "Fast Delete" "Permanently delete a file or folder with robocopy purge; no Recycle Bin." Red
         Write-MenuOption "4" "Move + Symlink" "Move the real item to a target path, then leave a link at the original path." Cyan
-        Write-MenuOption "5" "Symlink Only" "Only create a symbolic link; nothing is moved. Order of the two paths does not matter." Blue
+        Write-MenuOption "5" "Symlink Only" "Only create a symbolic link; nothing is moved. Order of the two paths does not matter." Cyan -AnsiColor ("{0}[38;5;117m" -f [char]27)
         Write-Blank
 
         $choice = Read-ConsoleText "Choose Option [1]"
@@ -2808,9 +2808,41 @@ function New-SymlinkMarkerFile {
     $markerPath = Join-Path -Path $markerDirectory -ChildPath $markerName
 
     try {
-        Set-Content -LiteralPath $markerPath -Value $LinkPath -Encoding UTF8 -ErrorAction Stop
-        Write-Line ("Marker file: {0}" -f $markerPath) $script:UiColor.Success
-        Write-Log "INFO" ("Marker file created: {0} -> {1}" -f $markerPath, $LinkPath)
+        # A single target can be linked from several places, so the marker
+        # accumulates one line per link and never overwrites the previous
+        # entries. The same link path is not added twice.
+        $existingLines = @()
+        if (Test-Path -LiteralPath $markerPath) {
+            $existingLines = @(Get-Content -LiteralPath $markerPath -Encoding UTF8 -ErrorAction Stop |
+                ForEach-Object { $_.TrimEnd() } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        }
+
+        $alreadyListed = $false
+        foreach ($line in $existingLines) {
+            if ([string]::Equals($line.Trim(), $LinkPath.Trim(), [System.StringComparison]::OrdinalIgnoreCase)) {
+                $alreadyListed = $true
+                break
+            }
+        }
+
+        if ($alreadyListed) {
+            Write-Line ("Marker file already lists this link: {0}" -f $markerPath) $script:UiColor.Muted
+            Write-Log "INFO" ("Marker file already contains link {0}: {1}" -f $LinkPath, $markerPath)
+            return $markerPath
+        }
+
+        $newLines = @($existingLines) + $LinkPath
+        Set-Content -LiteralPath $markerPath -Value $newLines -Encoding UTF8 -ErrorAction Stop
+
+        if ($existingLines.Count -gt 0) {
+            Write-Line ("Marker file updated (now {0} links): {1}" -f $newLines.Count, $markerPath) $script:UiColor.Success
+            Write-Log "INFO" ("Marker file appended link: {0} -> {1} (now {2} link(s))" -f $LinkPath, $markerPath, $newLines.Count)
+        }
+        else {
+            Write-Line ("Marker file: {0}" -f $markerPath) $script:UiColor.Success
+            Write-Log "INFO" ("Marker file created: {0} -> {1}" -f $markerPath, $LinkPath)
+        }
         return $markerPath
     }
     catch {
@@ -3017,8 +3049,10 @@ function Invoke-MoveAndLinkJob {
         $linkSnapshot = Get-LinkReplacementSnapshot -LinkPath $sourcePath -NewTargetPath $targetPath
 
         if ($sourceIsReplaceableLink) {
-            Write-Hint ("The original path is an existing {0} and the real target exists." -f $sourceStatus.Kind)
-            Write-Hint "The existing link is replaced with a new link only after you confirm; its target is never followed."
+            Write-Line ("WARNING: {0} is already a {1}." -f $sourcePath, $sourceStatus.Kind) $script:UiColor.Warning
+            Write-Line ("  It currently points to: {0}" -f $sourceStatus.LinkTarget) $script:UiColor.Path
+            Write-Line ("  It will be REPOINTED to: {0}" -f $targetPath) $script:UiColor.Warning
+            Write-Hint "Only the link is changed; the old target itself is never deleted or followed."
         }
         else {
             Write-Hint "The original path is missing and the real target exists."
@@ -3218,7 +3252,12 @@ function Invoke-SymlinkOnlyJob {
         Write-Hint ("New link: {0}  ->  {1}" -f $linkPath, $targetPath)
     }
     elseif ($linkIsReplaceable) {
-        Write-Hint ("The existing {0} at the other path is replaced with a new link only after you confirm; its target is never followed." -f $linkStatus.Kind)
+        # Make it unmistakable that an existing link is being repointed and show
+        # where it currently points, so its real target is never a surprise.
+        Write-Line ("WARNING: {0} is already a {1}." -f $linkPath, $linkStatus.Kind) $script:UiColor.Warning
+        Write-Line ("  It currently points to: {0}" -f $linkStatus.LinkTarget) $script:UiColor.Path
+        Write-Line ("  It will be REPOINTED to: {0}" -f $targetPath) $script:UiColor.Warning
+        Write-Hint "Only the link is changed; the old target itself is never deleted or followed."
     }
     else {
         Write-Hint ("The symbolic link will be created at: {0}" -f $linkPath)

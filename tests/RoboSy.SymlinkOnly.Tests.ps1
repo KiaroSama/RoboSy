@@ -49,6 +49,31 @@ try {
     $neither = Resolve-SymlinkOnlyDirection -FirstInfo $missingStatus -SecondInfo $secondMissing
     Assert-True "two missing paths are refused as NeitherReal" ($neither.Decision -eq "NeitherReal")
 
+    # -----------------------------------------------------------------
+    Write-Section "New-SymlinkMarkerFile: accumulates link paths, never overwrites"
+
+    $markerRoot = New-TestDirectory (Join-Path $sandbox "Marker")
+    $markerTarget = New-TestDirectory (Join-Path $markerRoot "Target")
+    $markerFile = Join-Path $markerTarget ("Symlink path_" + (Split-Path -Leaf $markerTarget) + ".txt")
+
+    New-SymlinkMarkerFile -TargetPath $markerTarget -LinkPath 'C:\Links\First' | Out-Null
+    New-SymlinkMarkerFile -TargetPath $markerTarget -LinkPath 'C:\Links\Second' | Out-Null
+    $afterTwo = @(Get-Content -LiteralPath $markerFile | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    Assert-True "two different links produce two marker lines" ($afterTwo.Count -eq 2)
+    Assert-True "first link path is preserved (not overwritten)" ($afterTwo -contains 'C:\Links\First')
+    Assert-True "second link path was appended" ($afterTwo -contains 'C:\Links\Second')
+
+    # Re-adding the same link (and a case-only variant) must NOT duplicate.
+    New-SymlinkMarkerFile -TargetPath $markerTarget -LinkPath 'C:\Links\Second' | Out-Null
+    New-SymlinkMarkerFile -TargetPath $markerTarget -LinkPath 'c:\links\FIRST' | Out-Null
+    $afterDupes = @(Get-Content -LiteralPath $markerFile | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    Assert-True "re-adding existing links (case-insensitive) does not duplicate" ($afterDupes.Count -eq 2)
+
+    # A third distinct link still appends.
+    New-SymlinkMarkerFile -TargetPath $markerTarget -LinkPath 'C:\Links\Third' | Out-Null
+    $afterThree = @(Get-Content -LiteralPath $markerFile | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    Assert-True "a third distinct link appends a third line" ($afterThree.Count -eq 3)
+
     # A probe for whether this session can create a junction at all. Every
     # link-creating scenario below is skipped (never silently passed) when it
     # cannot, exactly like the link-safety suite.

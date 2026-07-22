@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Fixed
+
+- Fixed the symbolic-link marker file (`Symlink path_<target>.txt`) so it accumulates every link that points at a target instead of overwriting. A target can be linked from several places; each new link is now appended on its own line (de-duplicated, case-insensitive) rather than erasing the previous entries.
+
+### Changed
+
+- Move + Symlink and Symlink Only now show, in the review screen before the confirmation, the current target of an existing link that is about to be replaced ("It currently points to: … / It will be REPOINTED to: …"), so repointing a link is never a surprise.
+- Recolored main-menu option `5` (Symlink Only) from a dark blue to a lighter blue that reads better in terminals, and tightened the navigation prompt to `{back=0, Run as admin=admin, quit=exit}` (removing stray spaces) to match the project family's console styling.
+
 ### Added
 
 - Added a new main-menu option `5` **Symlink Only**, which creates a symbolic link without ever moving or deleting anything. When only one of the two entered paths is a real file/folder, order does not matter: the real side becomes the link target and the other (missing, or an existing replaceable link) becomes the link. When **both** paths already exist, Path 1 is the real source and the link is created **inside** Path 2 as `<Path 2>\<Path 1 name>` pointing to Path 1 (nothing in Path 2 is deleted; Path 2 must be a folder, and an existing same-named item there is not overwritten). RoboSy stops without changing anything if neither path is a real item, and it refuses a link that would form a loop inside its own target. The exact link and direction are spelled out before the confirmation, and the `Path 1`/`Path 2` prompts carry a short parenthetical describing their roles. Links are created with the same rollback-safe, capability-preflighted, snapshot-verified machinery as Move + Symlink, including the directory junction fallback and the marker file at the real target.
