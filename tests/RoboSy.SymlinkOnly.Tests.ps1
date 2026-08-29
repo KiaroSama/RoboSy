@@ -186,6 +186,15 @@ try {
     Assert-True "collision inside Path 2 is refused" ($colResult.Output -match "already contains a real item named")
     Assert-True "collision left the occupant untouched" (Test-Path -LiteralPath (Join-Path $colOccupant "occupant.txt"))
     Assert-True "collision occupant is still a real folder, not replaced by a link" (-not (Get-PathStatus $colOccupant).IsReparsePoint)
+    Assert-True "collision re-asks Path 2 instead of returning to the main menu" (
+        ([regex]::Matches($colResult.Output, [regex]::Escape("Enter the second path"))).Count -ge 2
+    )
+    Assert-True "collision keeps Path 1 selected across the re-ask" (
+        ([regex]::Matches($colResult.Output, [regex]::Escape("Path 1:           " + $colSource))).Count -ge 2
+    )
+    Assert-True "collision does not redraw the main menu" (
+        ([regex]::Matches($colResult.Output, [regex]::Escape("Move (default)"))).Count -eq 1
+    )
 
     # -----------------------------------------------------------------
     Write-Section "Interactive end-to-end: create-only, both directions, never moves"

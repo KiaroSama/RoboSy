@@ -1008,7 +1008,9 @@ function Invoke-SymlinkOnlyJob {
         Write-Line ("  {0}" -f $linkPath) $script:UiColor.Path
         Write-Log "ERROR" ("Symlink-only stopped: link path exists and is not replaceable: {0}" -f (Format-PathStatusForLog $linkStatus))
         Write-Blank
-        return (Read-ReturnToMenu)
+        # Only Path 2 is at fault here (Path 1 is a valid real item); re-ask Path 2
+        # instead of discarding it and Path 1 by bouncing to the main menu.
+        return "BACK"
     }
 
     $capability = Test-LinkCreationCapability -LinkParent (Split-Path -Parent $linkPath) -ItemType $targetStatus.Type

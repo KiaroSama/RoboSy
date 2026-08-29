@@ -9,6 +9,7 @@
 
 ### Fixed
 
+- Fixed Symlink Only so that, when both paths already exist and Path 2 already contains a real (non-link) item with Path 1's name, RoboSy re-asks for Path 2 instead of discarding both paths and returning to the main menu.
 - Fixed the symbolic-link marker file (`Symlink path_<target>.txt`) so it accumulates every link that points at a target instead of overwriting. A target can be linked from several places; each new link is now appended on its own line (de-duplicated, case-insensitive) rather than erasing the previous entries.
 
 ### Changed
