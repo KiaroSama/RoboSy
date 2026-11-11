@@ -151,6 +151,8 @@ jobs:
                   # Keep scanner output private: commit messages may contain secrets despite redaction.
                   result = subprocess.run(command, capture_output=True, text=True, timeout=930)
                   require(result.returncode in (0, 2), f"Gitleaks failed with exit code {result.returncode}; no clean result was recorded.")
+                  # Gitleaks can log Git-reader errors while returning zero with an empty report.
+                  require(not result.stdout.strip() and not result.stderr.strip(), "Gitleaks reported scanner errors; no clean result was recorded.")
                   require(report_path.is_file(), "Gitleaks did not produce a complete report.")
                   findings = json.loads(report_path.read_text(encoding="utf-8"))
                   require(isinstance(findings, list) and all(isinstance(item, dict) for item in findings), "The scanner report format is invalid.")
